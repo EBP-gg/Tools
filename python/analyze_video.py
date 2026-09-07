@@ -458,6 +458,22 @@ ZB_LOADING_MAX_MEAN = 50.0
 ZB_CUT_START_MARGIN_S = 1.0
 ZB_CUT_END_MARGIN_S = 2.0
 
+# Fin de game de SECOURS, quand le tableau final n'a pas été affiché — l'opérateur
+# enchaîne parfois directement sur le chargement suivant, et la game entière était
+# alors perdue (une game ne s'ouvre que par sa fin). On borne à la place sur la fin
+# du gameplay, reconnu par la pastille ZOMBIES **et** le cartouche du joueur : la
+# pastille seule reste vraie en pré-game (jusqu'à 39 s d'erreur, un pré-game suit
+# souvent la partie), le cartouche seul est aussi affiché en After-H.
+#
+# La confirmation à -5 s et -10 s n'est pas du luxe : après l'outro on relève des
+# frames de « gameplay » ISOLÉES, détachées du jeu par un trou de 17 à 49 s. Sans
+# elle, quatre games sur quinze se terminaient jusqu'à 49 s trop tard — et le
+# repli se déclencherait avant même que l'outro soit rencontrée.
+ZB_PLAY_CONFIRM_S = (5.0, 10.0)
+# Écart entre la fin du gameplay et la fin de game : c'est la durée de l'outro,
+# que la borne inclut. Mesuré +15 à +17 s sur 14 des 15 games du corpus.
+ZB_END_NO_OUTRO_MARGIN_S = 15.0
+
 # ── Jeu d'arme ─────────────────────────────────────────────────────────────
 # Le seul des « autres jeux » à se présenter comme de l'After-H : même HUD
 # orange/bleu, même écran de loading, et un écran final que le détecteur de
@@ -4230,6 +4246,21 @@ def _detect_zombies_card(frame: np.ndarray) -> bool:
     return float(REGION.mean()) >= ZB_CARD_MIN_MEAN
 
 
+def _detect_zombies_playing(frame: np.ndarray) -> bool:
+    """
+    Est-on en GAMEPLAY zombie ? Il faut les deux marqueurs, chacun rattrapant ce
+    que l'autre laisse passer : la pastille reste affichée en pré-game et au
+    chargement, le cartouche l'est aussi dans une game After-H.
+    """
+    return _detect_zombies_hud(frame) and _detect_zombies_card(frame)
+
+
+def _zombies_playing_at(cap: cv2.VideoCapture, timestamp: float) -> bool:
+    """`_detect_zombies_playing` sur la frame de *timestamp*, décodée au passage."""
+    FRAME = _get_frame(cap, timestamp)
+    return FRAME is not None and _detect_zombies_playing(FRAME)
+
+
 def _detect_zombies_loading_frame(frame: np.ndarray) -> bool:
     """
     Détecte l'écran de loading qui OUVRE une game Zombies.
@@ -6191,6 +6222,39 @@ def _analyze(
                 ) - ZB_CUT_END_MARGIN_S
                 GAMES.insert(0, GAME)
                 CURRENT = GAME
+
+        # ── Zombies : fin du gameplay = fin de game (secours) ───────────────
+        # Testée après le tableau final, qui est plus précis quand il sort : on
+        # remonte la vidéo, donc il est rencontré en premier et cette branche ne
+        # sert que s'il a manqué. La confirmation en arrière est ce qui garantit
+        # cet ordre — les frames de « gameplay » isolées qui suivent l'outro ne
+        # la passent pas, et l'outro reste donc atteinte.
+        if not FOUND and (CURRENT is None or CURRENT['start'] != -1):
+            if (_detect_zombies_playing(FRAME)
+                    and all(_zombies_playing_at(CAP, TIMESTAMP - BACK)
+                            for BACK in ZB_PLAY_CONFIRM_S)):
+                PLAY_END = _scan_while(
+                    CAP, TIMESTAMP, _detect_zombies_playing,
+                )
+                # Le gameplay court jusqu'au bout du fichier : la partie n'est pas
+                # finie, c'est la captation qui s'arrête. Il n'y a pas de fin à
+                # dater — et surtout, l'émettre consommerait une game que le mode
+                # salle doit au contraire attendre (c'est le rôle de
+                # `zombiesInProgress`). Relevé sur une captation qui coupe 26 s
+                # après le début d'une partie.
+                if PLAY_END + ZB_END_NO_OUTRO_MARGIN_S <= DURATION:
+                    if DEBUG:
+                        _emit({'log': 'Zombies gameplay end found (no outro)'})
+                    FOUND = True
+                    JUST_JUMPED = False
+                    GAME = _new_game(0, game_type=GAME_TYPE_ZOMBIES)
+                    GAME['end'] = PLAY_END + ZB_END_NO_OUTRO_MARGIN_S
+                    GAMES.insert(0, GAME)
+                    CURRENT = GAME
+                elif DEBUG:
+                    _emit({'log': f'Zombies gameplay runs to {PLAY_END:.0f}s, '
+                                  f'past the end of a {DURATION:.0f}s capture — '
+                                  f'game still in progress, not emitted'})
 
         # ── Zombies : remontée par bonds tant qu'on est en plein jeu ────────
         # Une game dure 30 à 35 min qu'il serait absurde de remonter seconde par
