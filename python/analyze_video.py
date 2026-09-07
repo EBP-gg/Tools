@@ -432,25 +432,25 @@ ZB_CARD_MIN_MEAN = 40.0
 
 # Le respawn d'un joueur affiche le MÊME logo A et la MÊME barre de progression
 # que l'écran de loading — `_detect_game_loading_frame` ne les distingue pas. Ce
-# qui les sépare est ailleurs : le vrai écran de loading est posé sur un noir
-# plein et n'affiche PAS le cartouche du joueur, alors qu'un respawn laisse voir
-# la map et garde le cartouche. Trois pavés donc, tous à distance du logo, de la
-# barre et du bandeau haut, tous noirs sur un loading.
-# Les pavés latéraux sont COLLÉS au logo : une captation de salle affiche le flux
-# de la caméra de l'arène en bas à droite de son écran de chargement, ce qui
-# mettait en défaut un pavé large de ce côté (39,5 au lieu de 0) et faisait
-# rejeter de vrais chargements. Serrés contre le logo, il faudrait une
-# incrustation centrée sur l'écran pour les tromper — là où le jeu met le sien.
+# qui les sépare : le respawn se produit EN PARTIE, donc le cartouche du joueur
+# (avatar, arme, K/D/A, pseudo) est affiché ; sur un vrai chargement il ne l'est
+# pas encore. Une seule zone à regarder, donc.
+#
+# Deux pavés encadraient aussi le logo, sur l'idée que le vrai chargement est posé
+# sur un noir plein alors qu'un respawn laisse transparaître la map. Mesuré, c'est
+# faux : une map sombre (le LAB) donne 4.1 et 12.3 sur un respawn, contre 13.9 et
+# 13.2 sur un chargement dont le fond est le bleu nuit de la salle de briefing —
+# les deux classes se chevauchent, et le pavé gauche s'inverse même. Ces pavés ne
+# rejetaient donc aucun respawn ; ils perdaient des games entières dès que le
+# décor derrière le logo n'était pas parfaitement noir (relevé le 07/09/2026 sur
+# une captation de salle : game vue à 0:00 au lieu de 0:27).
 ZB_LOADING_DARK_BOXES = (
-    ((700, 420), (830, 650)),        # à gauche du logo : la map transparaît
-    ((1090, 420), (1220, 650)),      # à droite du logo : idem
     ZB_CARD_BOX,                     # cartouche du joueur, absent au loading
 )
-# Mesuré 0.00 sur quatre vrais écrans de loading (trois enregistrements de test
-# et une captation de salle). Sur un respawn : 5.4 et 13.8 sur les pavés
-# latéraux, ~118 sur le cartouche — ce dernier est le discriminant fort, les
-# deux autres sont là pour le cas où le joueur mort n'afficherait pas le sien.
-ZB_LOADING_MAX_MEAN = 1.5
+# Mesuré sur le cartouche : 0.0 à 13.0 sur cinq vrais écrans de loading, 102 à 122
+# sur les trois frames d'un respawn. 50 laisse un facteur ~4 de marge de chaque
+# côté — et il en faut, le fond du cartouche n'est pas noir mais transparent.
+ZB_LOADING_MAX_MEAN = 50.0
 
 # Marge de découpe, même esprit qu'en Color Chaos : la game commence 1 s APRÈS la
 # disparition de l'écran de loading et se termine 2 s AVANT celle du tableau
