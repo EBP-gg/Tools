@@ -22,6 +22,7 @@ import { FormsModule } from '@angular/forms';
 import { ToastrService } from 'ngx-toastr';
 import { MessageComponent } from '../../shared/message/message.component';
 import {
+  ArenaAudioLevel,
   ArenaCaptureDevice,
   ArenaCaptureStatus,
   ArenaLocation,
@@ -30,15 +31,16 @@ import {
 
 //#endregion
 
-/** Niveau RMS (~ -60 dBFS) sous lequel on considère qu'il n'y a pas de son. */
-const SILENCE_RMS: number = 0.001;
-/** Silence continu au-delà duquel on alerte (un blanc entre deux games est
+/** Niveau sous lequel on considère qu'un jeu capté ne produit pas de son. */
+const SILENCE_DBFS: number = -60;
+/** Bas de l'échelle du VU-mètre : en linéaire, un niveau de jeu normal
+ * resterait collé au bas de la barre et le contrôle visuel ne servirait à rien. */
+const METER_FLOOR_DBFS: number = -60;
+/** Silence continu au-delà duquel on alerte (un blanc pendant une game est
  * normal ; c'est l'absence durable qui signale une source muette). */
 const SILENCE_DELAY_MS: number = 20000;
-/** Période d'échantillonnage du niveau sonore. */
-const AUDIO_SAMPLE_MS: number = 200;
-/** Doit rester aligné sur ce que ffmpeg lit sur le tube (arena-audio-service). */
-const AUDIO_SAMPLE_RATE: number = 48000;
+/** Cadence du sondage : le helper natif publie un niveau par seconde. */
+const AUDIO_SAMPLE_MS: number = 1000;
 
 @Component({
   selector: 'view-arena-mode',
@@ -88,23 +90,24 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   private previewDeviceName?: string;
 
   /**
-   * Suivi du son du PC. `ok` = rien à signaler (état neutre pendant la
-   * temporisation), `silent` = alerte, `unavailable` = plateforme sans
-   * loopback, on ne mesure rien et on le dit plutôt que de crier au loup.
+   * Suivi du son ENREGISTRÉ. `ok` = un jeu est capté et il produit du son,
+   * `idle` = aucun jeu ne tourne (normal : la salle est entre deux parties),
+   * `silent` = alerte, un jeu est bien capté mais la piste est muette,
+   * `unavailable` = plateforme sans helper natif, on ne mesure rien et on le
+   * dit plutôt que de crier au loup.
    */
-  protected audioState: 'off' | 'unavailable' | 'silent' | 'ok' = 'off';
+  protected audioState:
+    | 'off'
+    | 'unavailable'
+    | 'idle'
+    | 'silent'
+    | 'ok' = 'off';
+  /** Exécutable capté, affiché à côté du VU-mètre comme diagnostic. */
+  protected audioTarget: string | null = null;
 
   @ViewChild('audioMeter')
   private audioMeter?: ElementRef<HTMLDivElement>;
-  private audioStream?: MediaStream;
-  private audioContext?: AudioContext;
-  private audioAnalyser?: AnalyserNode;
-  private audioProcessor?: ScriptProcessorNode;
-  private audioMute?: GainNode;
-  private audioSamples?: Float32Array<ArrayBuffer>;
   private audioTimer?: ReturnType<typeof setInterval>;
-  /** Acquisition du flux en cours (anti double-ouverture). */
-  private audioStarting: boolean = false;
   /** Début du silence en cours (ms), sinon undefined. */
   private silentSince?: number;
 
@@ -169,19 +172,20 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * L'aperçu ne consomme le flux caméra que lorsqu'il est visible : fenêtre
+   * Aperçu et VU-mètre ne tournent que lorsque la page est visible : fenêtre
    * minimisée ou masquée → on coupe (un PC de salle peut rester des heures sur
    * cette page). Au retour, on relance aussitôt sur la source courante plutôt
-   * que d'attendre le prochain poll de statut. La capture audio, elle, ne suit
-   * PAS la visibilité — elle fait partie de l'enregistrement.
+   * que d'attendre le prochain poll de statut.
+   *
+   * Ni l'un ni l'autre ne participe à l'enregistrement : la captation vidéo et
+   * la piste son vivent entièrement dans le main process, et continuent quoi
+   * que fasse l'opérateur dans l'interface.
    */
   private readonly onVisibilityChange = (): void => {
     this.ngZone.run(() => {
       if (document.hidden) {
-        // L'APERÇU seul est suspendu. Le moniteur audio, lui, alimente la
-        // piste son de la captation : le couper quand l'opérateur réduit
-        // Tools dans la barre des tâches enregistrerait du silence.
         this.stopPreview();
+        this.stopAudioMonitor();
       } else {
         if (this.captureStatus?.deviceName) {
           this.startPreview(this.captureStatus.deviceName);
@@ -300,92 +304,21 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Ouvre le son du PC en loopback et démarre la mesure de niveau. Le loopback
-   * est indépendant de la source vidéo : il dit si le logiciel enregistré
-   * produit du son, ce que l'aperçu image ne peut pas montrer.
+   * Démarre le suivi du niveau. La page ne capte plus rien elle-même : le son
+   * est prélevé sur le processus du jeu par le helper natif, dans le main
+   * process. On ne fait ici que sonder le niveau de CE flux — le VU-mètre
+   * mesure donc exactement ce qui part dans la vidéo, alors que l'ancien
+   * loopback mesurait le mix système et pouvait afficher du son alors que la
+   * piste enregistrée était muette.
    */
-  private async startAudioMonitor(): Promise<void> {
-    // Le drapeau est posé AVANT l'await : deux bascules de visibilité
-    // rapprochées lanceraient sinon deux acquisitions concurrentes, dont la
-    // première resterait ouverte sans que personne ne la référence.
-    if (this.audioStream || this.audioStarting) {
+  private startAudioMonitor(): void {
+    if (this.audioTimer) {
       return;
     }
-    this.audioStarting = true;
-    try {
-      await this.acquireAudioMonitor();
-    } finally {
-      this.audioStarting = false;
-    }
-  }
-
-  private async acquireAudioMonitor(): Promise<void> {
-    let stream: MediaStream;
-    try {
-      // La vidéo n'est demandée que parce que getDisplayMedia l'impose ; le
-      // main process renvoie un écran qu'on coupe juste en dessous.
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true
-      });
-    } catch {
-      // Refus du handler (plateforme sans loopback) : pas une erreur.
-      this.audioState = 'unavailable';
-      return;
-    }
-    for (const TRACK of stream.getVideoTracks()) {
-      TRACK.stop();
-    }
-    const AUDIO = stream.getAudioTracks()[0];
-    if (!AUDIO) {
-      for (const TRACK of stream.getTracks()) {
-        TRACK.stop();
-      }
-      this.audioState = 'unavailable';
-      return;
-    }
-    // Périphérique de sortie qui disparaît, session audio coupée : on cesse de
-    // mesurer plutôt que d'afficher un niveau figé à zéro qui ferait croire à
-    // un silence de la source.
-    AUDIO.onended = (): void =>
-      this.ngZone.run(() => {
-        this.stopAudioMonitor();
-        this.audioState = 'unavailable';
-      });
-    this.audioStream = stream;
-    // Fréquence imposée : le matériel peut tourner en 44,1 kHz, et ffmpeg lit
-    // le tube en 48 kHz en aveugle — un écart se traduirait par un son plus
-    // lent ou plus rapide dans les vidéos. Chromium rééchantillonne pour nous.
-    this.audioContext = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE });
-    const SOURCE = this.audioContext.createMediaStreamSource(stream);
-    this.audioAnalyser = this.audioContext.createAnalyser();
-    this.audioAnalyser.fftSize = 2048;
-    SOURCE.connect(this.audioAnalyser);
-    this.audioSamples = new Float32Array(this.audioAnalyser.fftSize);
-
-    // Extraction du PCM pour la bande son de la captation. ScriptProcessorNode
-    // est déprécié mais reste le seul moyen d'obtenir les échantillons sans
-    // charger un AudioWorklet depuis une URL — inutilement compliqué ici.
-    const PROCESSOR = this.audioContext.createScriptProcessor(4096, 2, 2);
-    SOURCE.connect(PROCESSOR);
-    // Un ScriptProcessorNode ne se déclenche QUE s'il aboutit à la sortie. On
-    // passe donc par un gain nul : le nœud tourne, et rien n'est joué — sinon
-    // le PC réémettrait le son capté et le loopback le recapterait en boucle.
-    const MUTE = this.audioContext.createGain();
-    MUTE.gain.value = 0;
-    PROCESSOR.connect(MUTE);
-    MUTE.connect(this.audioContext.destination);
-    PROCESSOR.onaudioprocess = (event: AudioProcessingEvent): void => {
-      window.electronAPI.arenaAudioSendChunk(
-        this.toInterleavedPcm(event.inputBuffer)
-      );
-    };
-    this.audioProcessor = PROCESSOR;
-    this.audioMute = MUTE;
-    this.audioState = 'ok';
     this.silentSince = undefined;
-    // Hors zone Angular : 5 échantillons/s ne doivent pas déclencher 5 cycles
-    // de détection de changements par seconde (le VU-mètre est écrit
+    this.sampleAudio();
+    // Hors zone Angular : un sondage par seconde ne doit pas déclencher un
+    // cycle de détection de changements par seconde (le VU-mètre est écrit
     // directement dans le DOM, seul le changement d'état rentre dans la zone).
     this.ngZone.runOutsideAngular(() => {
       this.audioTimer = setInterval(
@@ -395,64 +328,67 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
     });
   }
 
-  /** Mesure le niveau courant, met à jour le VU-mètre et l'état d'alerte. */
+  /** Relève le niveau enregistré, met à jour le VU-mètre et l'état d'alerte. */
   private sampleAudio(): void {
-    if (!this.audioAnalyser || !this.audioSamples) {
-      return;
-    }
-    this.audioAnalyser.getFloatTimeDomainData(this.audioSamples);
-    let sum = 0;
-    for (let i = 0; i < this.audioSamples.length; i++) {
-      sum += this.audioSamples[i] * this.audioSamples[i];
-    }
-    const RMS = Math.sqrt(sum / this.audioSamples.length);
+    window.electronAPI
+      .arenaAudioGetLevel()
+      .then((level: ArenaAudioLevel) => this.applyAudioLevel(level))
+      .catch(() => this.setAudioState('unavailable', null));
+  }
+
+  private applyAudioLevel(level: ArenaAudioLevel): void {
     if (this.audioMeter) {
-      // Échelle dBFS -60 → 0 : en linéaire, un niveau de jeu normal resterait
-      // collé au bas de la barre et le contrôle visuel ne servirait à rien.
-      const DB = 20 * Math.log10(Math.max(RMS, 1e-6));
-      const RATIO = Math.min(1, Math.max(0, (DB + 60) / 60));
+      const RATIO =
+        level.levelDbfs === null
+          ? 0
+          : Math.min(
+              1,
+              Math.max(
+                0,
+                (level.levelDbfs - METER_FLOOR_DBFS) / -METER_FLOOR_DBFS
+              )
+            );
       this.audioMeter.nativeElement.style.width = `${Math.round(RATIO * 100)}%`;
     }
-    if (RMS >= SILENCE_RMS) {
+    if (!level.available) {
+      this.setAudioState('unavailable', null);
+      return;
+    }
+    // Aucun jeu ne tourne : il n'y a rien à capter et rien à signaler. C'est
+    // le cas normal entre deux parties, et c'est ce qui distingue cette alerte
+    // de l'ancienne — elle ne se déclenche plus que si un jeu est bel et bien
+    // capté alors que sa piste est muette.
+    if (level.levelDbfs === null) {
       this.silentSince = undefined;
-      this.setAudioState('ok');
+      this.setAudioState('idle', null);
+      return;
+    }
+    if (level.levelDbfs >= SILENCE_DBFS) {
+      this.silentSince = undefined;
+      this.setAudioState('ok', level.targetExecutable);
       return;
     }
     const NOW = Date.now();
     if (this.silentSince === undefined) {
       this.silentSince = NOW;
+      this.setAudioState('ok', level.targetExecutable);
     } else if (NOW - this.silentSince >= SILENCE_DELAY_MS) {
-      this.setAudioState('silent');
+      this.setAudioState('silent', level.targetExecutable);
     }
-  }
-
-  /**
-   * Float32 par canal → s16le entrelacé, le format que ffmpeg lit sur le tube.
-   * Mono en entrée (source à un seul canal) : on duplique, la piste reste
-   * stéréo et le débit attendu par le cadencement côté main process est tenu.
-   */
-  private toInterleavedPcm(buffer: AudioBuffer): Uint8Array {
-    const LEFT = buffer.getChannelData(0);
-    const RIGHT =
-      buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : LEFT;
-    const OUT = new Int16Array(buffer.length * 2);
-    for (let i = 0; i < buffer.length; i++) {
-      // Écrêtage avant conversion : au-delà de ±1 le cast déborderait et
-      // produirait un craquement au lieu d'une saturation propre.
-      const L = Math.max(-1, Math.min(1, LEFT[i]));
-      const R = Math.max(-1, Math.min(1, RIGHT[i]));
-      OUT[i * 2] = L < 0 ? L * 0x8000 : L * 0x7fff;
-      OUT[i * 2 + 1] = R < 0 ? R * 0x8000 : R * 0x7fff;
-    }
-    return new Uint8Array(OUT.buffer);
   }
 
   /** Ne rentre dans la zone Angular que sur un vrai changement d'état. */
-  private setAudioState(state: 'silent' | 'ok'): void {
-    if (this.audioState === state) {
+  private setAudioState(
+    state: 'unavailable' | 'idle' | 'silent' | 'ok',
+    target: string | null
+  ): void {
+    if (this.audioState === state && this.audioTarget === target) {
       return;
     }
-    this.ngZone.run(() => (this.audioState = state));
+    this.ngZone.run(() => {
+      this.audioState = state;
+      this.audioTarget = target;
+    });
   }
 
   private stopAudioMonitor(): void {
@@ -465,32 +401,9 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
       // lit comme un niveau courant alors qu'on ne mesure plus rien.
       this.audioMeter.nativeElement.style.width = '0';
     }
-    if (this.audioStream) {
-      for (const TRACK of this.audioStream.getTracks()) {
-        TRACK.onended = null;
-        TRACK.stop();
-      }
-      this.audioStream = undefined;
-    }
-    if (this.audioProcessor) {
-      // Le handler garde une référence au composant : sans ce détachement, le
-      // nœud continuerait d'émettre du PCM après la fermeture du contexte.
-      this.audioProcessor.onaudioprocess = null;
-      this.audioProcessor.disconnect();
-      this.audioProcessor = undefined;
-    }
-    if (this.audioMute) {
-      this.audioMute.disconnect();
-      this.audioMute = undefined;
-    }
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = undefined;
-    }
-    this.audioAnalyser = undefined;
-    this.audioSamples = undefined;
     this.silentSince = undefined;
     this.audioState = 'off';
+    this.audioTarget = null;
   }
 
   private stopPreview(): void {

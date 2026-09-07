@@ -244,6 +244,20 @@ int wmain(int argc, wchar_t** argv) {
     fwprintf(stderr, L"[info] capture du pid %lu (%s)\n", PID,
              exeNameForPid(PID).c_str());
 
+    // Poignée sur le processus ciblé. Elle désigne l'OBJET NOYAU et non le
+    // numéro : Windows réattribue les pid, et un superviseur qui se contenterait
+    // de tester l'existence du numéro finirait par croire le jeu vivant alors
+    // qu'un autre programme en a hérité. La poignée passe à l'état signalé à la
+    // mort du processus, et c'est ce qui nous fait sortir proprement — sans quoi
+    // ce helper resterait activé sur un processus disparu, sans plus jamais
+    // produire d'échantillon, et plus aucune game ne serait sonorisée.
+    HANDLE TARGET = OpenProcess(SYNCHRONIZE, FALSE, PID);
+    if (!TARGET) {
+        fwprintf(stderr,
+                 L"[warn] surveillance du processus indisponible (err %lu)\n",
+                 GetLastError());
+    }
+
     // stdout en binaire : sans ca le CRT traduirait 0x0A en 0x0D0A et
     // corromprait le PCM.
     _setmode(_fileno(stdout), _O_BINARY);
@@ -366,8 +380,16 @@ int wmain(int argc, wchar_t** argv) {
             sampleCount = 0;
             lastLevel = NOW;
         }
+
+        // Testé APRÈS la vidange des paquets : la fin du jeu ne doit pas nous
+        // faire perdre le son déjà mis en tampon.
+        if (TARGET && WaitForSingleObject(TARGET, 0) == WAIT_OBJECT_0) {
+            fwprintf(stderr, L"[info] processus cible termine\n");
+            break;
+        }
     }
 
+    if (TARGET) CloseHandle(TARGET);
     CLIENT->Stop();
     capture->Release();
     CLIENT->Release();

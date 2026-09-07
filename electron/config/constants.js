@@ -134,6 +134,19 @@ const COMPONENT_PLATFORM_KEY =
 const COMPONENTS_DIR = path.join(app.getPath('userData'), 'components');
 const FFMPEG_PATH = getComponentPath('ffmpeg');
 const ANALYZER_PATH = getComponentPath('analyzer');
+// Helper de capture audio par processus (mode salle, Windows). Contrairement à
+// ffmpeg et à l'analyzer il n'est PAS un composant téléchargé : 176 Ko livrés
+// avec l'app coûtent moins cher qu'un job CI MSVC et qu'un script de
+// publication à généraliser. Il est donc versionné dans `binaries/`, et copié
+// dans les ressources par `extraResource` (cf. forge.config.js).
+const AUDIO_LOOPBACK_PATH = IS_DEV_MODE
+    ? path.join(
+          path.dirname(ROOT_PATH),
+          'binaries',
+          'audio-loopback',
+          'win32.exe'
+      )
+    : path.join(ROOT_PATH, 'audio-loopback', 'win32.exe');
 const PERMANENT_SETTINGS_PATH = path.join(
     app.getPath('userData'),
     'settings.json'
@@ -202,6 +215,7 @@ module.exports = {
 
     FFMPEG_PATH,
     ANALYZER_PATH,
+    AUDIO_LOOPBACK_PATH,
     getAnalyzerSpawn,
 
     COMPONENTS,

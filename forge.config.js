@@ -13,6 +13,7 @@ module.exports = {
             './angular/dist/angular/browser/',
             './electron/assets/',
             './electron/template.xlsx',
+            './binaries/audio-loopback/',
             './app-update.yml'
         ],
         icon: 'electron/assets/icon',

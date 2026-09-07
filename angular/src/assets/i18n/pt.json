@@ -176,7 +176,8 @@
         "moveFolderStopFirst": "Pare a captação antes de mover a pasta",
         "audio": {
           "level": "Nível sonoro",
-          "silent": "Nenhum som detetado há mais de 20 segundos. Verifique se o software gravado está a produzir som e se a saída de áudio do PC não está silenciada.",
+          "silent": "O jogo está a ser captado, mas não emite qualquer som há mais de 20 segundos. Verifique se o jogo está a produzir som.",
+          "idle": "Nenhum jogo em curso: não há som para gravar. A captação recomeça sozinha quando começar uma partida.",
           "unavailable": "O nível sonoro não pode ser medido neste sistema.",
           "notPiped": "O som está a ser captado, mas não chega à gravação: o ffmpeg não abriu o canal de áudio. Os vídeos desta captação ficarão mudos."
         }

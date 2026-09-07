@@ -176,7 +176,8 @@
         "moveFolderStopFirst": "Arrêtez la captation avant de déplacer le dossier",
         "audio": {
           "level": "Niveau sonore",
-          "silent": "Aucun son détecté depuis plus de 20 secondes. Vérifiez que le logiciel enregistré produit bien du son et que la sortie audio du PC n'est pas coupée.",
+          "silent": "Le jeu est bien capté, mais il n'émet aucun son depuis plus de 20 secondes. Vérifiez que le jeu produit du son.",
+          "idle": "Aucun jeu en cours : il n'y a pas de son à enregistrer. La capture reprendra d'elle-même au lancement d'une partie.",
           "unavailable": "Le niveau sonore ne peut pas être mesuré sur ce système.",
           "notPiped": "Le son est bien capté, mais il n'est pas transmis à l'enregistrement : ffmpeg n'a pas ouvert le canal audio. Les vidéos de cette captation seront muettes."
         }

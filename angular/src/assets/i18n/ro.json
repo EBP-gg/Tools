@@ -176,7 +176,8 @@
         "moveFolderStopFirst": "Opriți captura înainte de a muta folderul",
         "audio": {
           "level": "Nivel sonor",
-          "silent": "Niciun sunet detectat de peste 20 de secunde. Verificați dacă software-ul înregistrat produce sunet și dacă ieșirea audio a PC-ului nu este dezactivată.",
+          "silent": "Jocul este captat, dar nu emite niciun sunet de peste 20 de secunde. Verificați dacă jocul produce efectiv sunet.",
+          "idle": "Niciun joc în desfășurare: nu există sunet de înregistrat. Captura va reporni singură la începerea unei partide.",
           "unavailable": "Nivelul sonor nu poate fi măsurat pe acest sistem.",
           "notPiped": "Sunetul este captat, dar nu ajunge la înregistrare: ffmpeg nu a deschis canalul audio. Videoclipurile acestei capturi vor fi mute."
         }

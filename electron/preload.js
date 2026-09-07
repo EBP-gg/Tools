@@ -76,9 +76,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // The front-end asks the server to start/stop the arena capture.
   arenaCaptureStart: () => ipcRenderer.invoke("arena-capture-start"),
   arenaCaptureStop: () => ipcRenderer.invoke("arena-capture-stop"),
-  // The front-end streams captured loopback audio (PCM s16le) to the server.
-  // `send` and not `invoke`: fire-and-forget, several times per second.
-  arenaAudioSendChunk: (chunk) => ipcRenderer.send("arena-audio-chunk", chunk),
+  // The front-end polls the recorded audio level for the VU meter.
+  arenaAudioGetLevel: () => ipcRenderer.invoke("arena-audio-level"),
   // The front-end asks the server to open the arena working folder in the explorer.
   arenaOpenFolder: () => ipcRenderer.invoke("arena-open-folder"),
   // The front-end asks the server to move the arena working folder to a new location.

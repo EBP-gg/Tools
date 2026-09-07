@@ -73,6 +73,16 @@ export interface ArenaCaptureDevice {
   height?: number;
 }
 
+/** Niveau du son réellement enregistré, sondé chaque seconde par le VU-mètre. */
+export interface ArenaAudioLevel {
+  /** Faux là où le helper natif n'existe pas (hors Windows) : on ne mesure rien. */
+  available: boolean;
+  /** Exécutable du jeu capté, null si aucun ne tourne. */
+  targetExecutable: string | null;
+  /** null quand aucun jeu n'est capté ; plancher à -100 dBFS sinon. */
+  levelDbfs: number | null;
+}
+
 export interface ArenaCaptureStatus {
   running: boolean;
   deviceId: string | null;
@@ -92,6 +102,11 @@ export interface ArenaCaptureStatus {
     receivedBytes: number;
     sampleRate: number;
     channels: number;
+    /** Exécutable du jeu dont le son est capté, null si aucun ne tourne. */
+    targetExecutable: string | null;
+    targetPid: number | null;
+    /** Niveau du flux réellement enregistré. null = aucune cible en cours. */
+    levelDbfs: number | null;
   };
 }
 
@@ -179,7 +194,7 @@ export interface ElectronAPI {
   ) => Promise<ArenaCaptureStatus>;
   arenaCaptureStart: () => Promise<ArenaCaptureStatus>;
   arenaCaptureStop: () => Promise<ArenaCaptureStatus>;
-  arenaAudioSendChunk: (chunk: Uint8Array) => void;
+  arenaAudioGetLevel: () => Promise<ArenaAudioLevel>;
   arenaOpenFolder: () => Promise<void>;
   arenaMoveFolder: () => Promise<{
     success: boolean;

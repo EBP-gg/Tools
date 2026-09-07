@@ -176,7 +176,8 @@
         "moveFolderStopFirst": "Stop the capture before moving the folder",
         "audio": {
           "level": "Audio level",
-          "silent": "No sound detected for over 20 seconds. Check that the recorded software is actually producing sound and that the PC audio output is not muted.",
+          "silent": "The game is being captured, but it has produced no sound for over 20 seconds. Check that the game is actually producing sound.",
+          "idle": "No game running: there is no sound to record. Capture will resume on its own when a game starts.",
           "unavailable": "The audio level cannot be measured on this system.",
           "notPiped": "Sound is being captured, but it is not reaching the recording: ffmpeg did not open the audio channel. Videos from this capture will be silent."
         }

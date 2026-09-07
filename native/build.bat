@@ -7,7 +7,7 @@ REM Requires the Windows SDK 10.0.20348 or newer (audioclientactivationparams.h)
 
 cl /nologo /std:c++17 /EHsc /O2 /W3 audio_loopback.cpp ^
    /Fe:audio_loopback.exe ^
-   /link ole32.lib mmdevapi.lib
+   /link ole32.lib mmdevapi.lib user32.lib
 if errorlevel 1 goto :error
 
 if not exist "..\binaries\audio-loopback" mkdir "..\binaries\audio-loopback"

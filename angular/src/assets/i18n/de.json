@@ -176,7 +176,8 @@
         "moveFolderStopFirst": "Stoppen Sie die Aufnahme, bevor Sie den Ordner verschieben",
         "audio": {
           "level": "Tonpegel",
-          "silent": "Seit über 20 Sekunden kein Ton erkannt. Prüfen Sie, ob die aufgezeichnete Software tatsächlich Ton ausgibt und die Audioausgabe des PCs nicht stummgeschaltet ist.",
+          "silent": "Das Spiel wird erfasst, gibt aber seit über 20 Sekunden keinen Ton aus. Prüfen Sie, ob das Spiel tatsächlich Ton ausgibt.",
+          "idle": "Kein Spiel aktiv: Es gibt keinen Ton aufzuzeichnen. Die Erfassung wird beim Start einer Partie automatisch fortgesetzt.",
           "unavailable": "Der Tonpegel kann auf diesem System nicht gemessen werden.",
           "notPiped": "Der Ton wird erfasst, erreicht aber die Aufnahme nicht: ffmpeg hat den Audiokanal nicht geöffnet. Die Videos dieser Aufnahme bleiben stumm."
         }

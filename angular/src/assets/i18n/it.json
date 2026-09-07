@@ -176,7 +176,8 @@
         "moveFolderStopFirst": "Ferma l'acquisizione prima di spostare la cartella",
         "audio": {
           "level": "Livello audio",
-          "silent": "Nessun suono rilevato da più di 20 secondi. Verifica che il software registrato produca effettivamente audio e che l'uscita audio del PC non sia disattivata.",
+          "silent": "Il gioco viene acquisito, ma non produce alcun suono da più di 20 secondi. Verifica che il gioco produca effettivamente audio.",
+          "idle": "Nessun gioco in corso: non c'è alcun suono da registrare. L'acquisizione riprenderà da sola all'avvio di una partita.",
           "unavailable": "Il livello audio non può essere misurato su questo sistema.",
           "notPiped": "Il suono viene acquisito, ma non arriva alla registrazione: ffmpeg non ha aperto il canale audio. I video di questa acquisizione saranno muti."
         }

@@ -12,8 +12,7 @@ const {
     Menu,
     nativeImage,
     nativeTheme,
-    shell,
-    desktopCapturer
+    shell
 } = require('electron');
 const path = require('node:path');
 const { setupConsoleRedirection } = require('./console-manager');
@@ -202,38 +201,6 @@ function createWindow(updateService) {
                 : MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY
         }
     });
-
-    // Mode salle : la page de captation mesure le niveau du son du PC pour
-    // alerter quand la source est muette — l'image seule ne le dit pas.
-    // Electron refuse getDisplayMedia tant qu'aucun handler n'est posé.
-    // Le loopback audio est propre à Windows (les PC de salle le sont) :
-    // ailleurs on refuse la demande, et la page affiche « mesure
-    // indisponible » plutôt que d'ouvrir une capture d'écran pour rien.
-    mainWindow.webContents.session.setDisplayMediaRequestHandler(
-        (request, callback) => {
-            if (process.platform !== 'win32') {
-                callback({});
-                return;
-            }
-            // Ce handler ne sert QUE au son. L'aperçu d'une source écran ne
-            // passe pas par desktopCapturer : ses sources ne désignent pas les
-            // mêmes écrans que les index ddagrab, et faire correspondre les
-            // deux énumérations a échoué trois fois. L'aperçu est désormais une
-            // image produite par ddagrab lui-même.
-            desktopCapturer
-                .getSources({ types: ['screen'] })
-                .then((sources) => {
-                    // Une piste vidéo est imposée par l'API : le renderer la
-                    // coupe aussitôt pour ne garder que l'audio.
-                    callback(
-                        sources.length
-                            ? { video: sources[0], audio: 'loopback' }
-                            : {}
-                    );
-                })
-                .catch(() => callback({}));
-        }
-    );
 
     let language = StorageManager.permanentSettings['language'];
     if (!language) {

@@ -56,6 +56,12 @@ Lancer After-H avec du son, puis `win32.exe "After-H"` et **regarder les lignes
    Le niveau ne doit pas bouger.
 5. **Autre application** — lancer une musique dans un navigateur. Le niveau ne
    doit **pas** réagir : on ne capte qu'After-H.
+6. **Périphérique de sortie** — changer la sortie par défaut de Windows pendant
+   la capture (HP du PC ↔ écran HDMI ↔ casque). Le niveau ne doit pas bouger.
+   Chaque sortie HDMI est un point de terminaison audio distinct : le loopback
+   classique ne capte que la sortie par défaut et devient muet dès que le jeu
+   rend son son ailleurs. C'est le défaut observé en salle, et l'activation sur
+   `VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK` doit précisément l'éliminer.
 
 Vérification d'écoute, une fois les niveaux validés — enregistrer 10 secondes en
 WAV et le relire :

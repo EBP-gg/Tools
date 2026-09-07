@@ -2809,9 +2809,9 @@ if (!APP_GOT_THE_LOCK) {
             return arenaCaptureService.stopCapture();
         });
 
-        // The front-end streams loopback PCM for the arena capture soundtrack.
-        ipcMain.on('arena-audio-chunk', (event, chunk) => {
-            arenaAudioService.writeChunk(chunk);
+        // The front-end polls the level of the audio actually being recorded.
+        ipcMain.handle('arena-audio-level', () => {
+            return arenaAudioService.getLevel();
         });
 
         // The front-end asks the server to save the current language.

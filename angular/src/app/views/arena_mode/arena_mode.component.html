@@ -107,6 +107,9 @@ See LICENSE for terms. Unauthorized use is prohibited.
                 <div class="audio-track">
                   <div #audioMeter class="audio-meter"></div>
                 </div>
+                @if (audioTarget) {
+                  <span class="audio-target">{{ audioTarget }}</span>
+                }
               </div>
               @if (captureStatus.running && !captureStatus.videoStarted) {
                 <ebp-message>
@@ -121,6 +124,10 @@ See LICENSE for terms. Unauthorized use is prohibited.
               @if (audioState === 'silent') {
                 <ebp-message state="error">
                   {{ 'view.arena_mode.capture.audio.silent' | translate }}
+                </ebp-message>
+              } @else if (audioState === 'idle') {
+                <ebp-message>
+                  {{ 'view.arena_mode.capture.audio.idle' | translate }}
                 </ebp-message>
               } @else if (audioState === 'unavailable') {
                 <ebp-message>

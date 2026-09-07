@@ -19,7 +19,7 @@ form {
   gap: variables.$margin;
 }
 
-// VU-mètre du son du PC (contrôle sonore, pendant de l'aperçu image).
+// VU-mètre du son enregistré (contrôle sonore, pendant de l'aperçu image).
 .audio {
   display: flex;
   align-items: center;
@@ -42,6 +42,14 @@ form {
   height: 100%;
   width: 0;
   background-color: variables.$main_color;
+}
+
+// Exécutable dont le son est capté : c'est le diagnostic qui dit lequel des
+// jeux de la salle alimente la piste.
+.audio-target {
+  font-size: variables.$font_size;
+  white-space: nowrap;
+  opacity: 0.7;
 }
 
 // Aperçu live de la source capturée (contrôle visuel).
