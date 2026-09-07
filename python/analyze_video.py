@@ -315,33 +315,40 @@ CC_INTRO_BLACK_MAX_CHANNEL = 40        # max(R,G,B) pour qualifier « noir »
 CC_INTRO_MIN_BLACK = 0.85
 CC_INTRO_MIN_YELLOW = 0.55
 
-# Outro : le chrono du HUD à « 00:00 ». On ne peut pas finir la partie avant,
-# donc c'est la fin du jeu. Le tableau final « TOP joueurs » a servi d'outro
-# jusqu'au 06/09/2026 : il n'est affiché que si l'opérateur laisse la séquence de
-# fin se dérouler, et sur 27 games de captation salle il ne sortait que 5 fois —
-# l'outro manquée faisant perdre la game entière (une game ne s'ouvre que par sa
-# fin), 5 games sur 27 étaient détectées. Le chrono, lui, sort sur 27/27, et sur
-# les 5 games où les deux signaux coexistaient il donnait la même borne à 1,5 s
-# près. Origine = coin haut-gauche du disque du chrono, centré en X tout en haut.
+# Outro : la DISPARITION du chrono du HUD. Il est à l'écran pendant toute la
+# partie et s'éteint avec elle, ce qui en fait la borne de fin la plus générale —
+# elle ne suppose rien de la façon dont la partie se termine.
+#
+# Deux signaux ont servi avant, tous deux abandonnés parce qu'ils supposaient
+# justement quelque chose (une game ne s'ouvrant que par sa fin, une fin manquée
+# perd la game entière) :
+#   - le tableau final « TOP joueurs », affiché seulement si l'opérateur laisse
+#     la séquence de fin se dérouler : 5 fois sur 27 en captation salle ;
+#   - le chrono à « 00:00 », qui suppose que la partie va à son terme : un game
+#     master qui l'écourte l'arrête en route (relevé à 00:06), et la game est
+#     perdue. Il affichait en prime un « 00:00 » parasite de 0.25 s au DÉMARRAGE,
+#     avant de basculer sur 04:00.
+# Mesuré sur 32 games : disparition du chrono 32/32, contre 31/32 pour le 00:00.
+#
+# Origine = coin haut-gauche du disque du chrono, centré en X tout en haut.
 CC_TIMER_ORIGIN = (872, 49)
 CC_TIMER_SIZE = 173
-CC_TIMER_BAND_Y = (64, 106)            # bande des chiffres dans le disque
-# On matche les deux groupes de chiffres SÉPARÉMENT, et le score retenu est le
-# plus faible des deux. Matcher le disque entier ne discrimine rien : il est
-# affiché pendant toute la game et seuls les chiffres changent (0.86 en plein
-# gameplay contre 0.999 à 00:00). Le « : » central est exclu pour la même
-# raison — invariant, il ne fait que gonfler le score.
-CC_TIMER_MIN_X = (15, 68)              # « 00 » des minutes
-CC_TIMER_SEC_X = (102, 155)            # « 00 » des secondes
-CC_TIMER_MIN_NCC = 0.93                # mesuré 0.998 à 00:00, ≤ 0.874 ailleurs
+# On matche deux BANDES du disque, au-dessus et en dessous des chiffres, et on
+# retient le plus faible des deux scores. Les chiffres sont exclus parce qu'ils
+# changent à chaque seconde ; ce qui reste — l'arc noir et son cerclage jaune —
+# ne dépend que de la présence du chrono. Bandes pleines et non masque : un
+# `matchTemplate` masqué renvoie NaN quand la zone est uniforme, ce qui arrive
+# pour de vrai (écran de jeu noir quand le flux VR est perdu).
+CC_TIMER_TOP_Y = (0, 64)
+CC_TIMER_BOTTOM_Y = (107, 173)
+CC_TIMER_MIN_NCC = 0.70                # mesuré ≥ 0.99 en jeu, ≤ 0.43 hors jeu
 
-# Marge ajoutée après le chrono à 00:00 pour englober les écrans de fin
+# Marge ajoutée après la disparition du chrono pour englober les écrans de fin
 # (RÉSULTATS, SPÉCIALISTES, MVP, tableau final) et le retour au menu. Combien il
-# en faut dépend de ce que le jeu affiche : 2 à 33 s sur les 27 games mesurées.
-# Le plafond, lui, est net — la game suivante ne démarre jamais moins de 37 s
-# après le 00:00, intro comprise. 30 s garde donc 7 s de sécurité, au prix des
-# ~2,5 dernières secondes du tableau final quand celui-ci est affiché.
-CC_END_MENU_MARGIN_S = 30.0
+# en faut dépend de ce que le jeu affiche : 0 à 31 s sur les 32 games mesurées.
+# Le plafond, lui, est net — le chrono de la partie suivante ne réapparaît jamais
+# moins de 48 s après. 35 s laisse donc 13 s de sécurité.
+CC_END_MENU_MARGIN_S = 35.0
 
 # Marge de découpe du début : la game commence 1 s APRÈS la disparition du
 # décompte d'intro.
@@ -4064,53 +4071,56 @@ _CC_TIMER_TEMPLATE_CACHE = None
 
 
 def _get_cc_timer_templates():
-    """Charge (et cache) les deux groupes de chiffres du chrono à « 00:00 »."""
+    """Charge (et cache) les deux bandes du disque du chrono, hors chiffres."""
     global _CC_TIMER_TEMPLATE_CACHE
     if _CC_TIMER_TEMPLATE_CACHE is not None:
         return _CC_TIMER_TEMPLATE_CACHE
     BASE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-    PATH = os.path.join(BASE, 'templates', 'color_chaos', 'timer_zero.png')
-    BAND = cv2.imread(PATH, cv2.IMREAD_GRAYSCALE) if os.path.isfile(PATH) else None
-    if BAND is None:
+    PATH = os.path.join(BASE, 'templates', 'color_chaos', 'timer_hud.png')
+    DISC = cv2.imread(PATH, cv2.IMREAD_GRAYSCALE) if os.path.isfile(PATH) else None
+    if DISC is None:
         _CC_TIMER_TEMPLATE_CACHE = (None, None)
     else:
         _CC_TIMER_TEMPLATE_CACHE = (
-            BAND[:, CC_TIMER_MIN_X[0]:CC_TIMER_MIN_X[1]],
-            BAND[:, CC_TIMER_SEC_X[0]:CC_TIMER_SEC_X[1]],
+            DISC[CC_TIMER_TOP_Y[0]:CC_TIMER_TOP_Y[1], :],
+            DISC[CC_TIMER_BOTTOM_Y[0]:CC_TIMER_BOTTOM_Y[1], :],
         )
     return _CC_TIMER_TEMPLATE_CACHE
 
 
-def _detect_color_chaos_timer_zero(frame: np.ndarray) -> bool:
+def _detect_color_chaos_timer_hud(frame: np.ndarray) -> bool:
     """
-    Détecte le chrono du HUD Color Chaos à « 00:00 » — la partie ne peut pas
-    se terminer avant, donc c'est une fin de game.
+    Détecte la PRÉSENCE du chrono du HUD Color Chaos, quelle que soit sa valeur.
+    Il est affiché pendant toute la partie : sa disparition est la fin de game.
 
-    Le disque noir cerclé de jaune qui porte ce chrono est le sosie du splash
-    d'intro (`_detect_color_chaos_intro`) : seule la position les sépare, le
-    chrono tout en haut et le splash au centre de l'écran. Les deux détecteurs
-    doivent donc rester à position strictement fixe.
+    On ne regarde que l'arc noir et son cerclage jaune, au-dessus et en dessous
+    des chiffres — ceux-ci changent chaque seconde et ne diraient rien de la
+    présence du chrono.
+
+    Le disque qui le porte est le sosie du splash d'intro
+    (`_detect_color_chaos_intro`) : seule la position les sépare, le chrono tout
+    en haut et le splash au centre de l'écran. Les deux détecteurs doivent donc
+    rester à position strictement fixe.
     """
-    TPL_MIN, TPL_SEC = _get_cc_timer_templates()
-    if TPL_MIN is None:
+    TPL_TOP, TPL_BOTTOM = _get_cc_timer_templates()
+    if TPL_TOP is None:
         return False
     X0, Y0 = CC_TIMER_ORIGIN
-    YA, YB = CC_TIMER_BAND_Y
     H, W = frame.shape[:2]
-    if X0 + CC_TIMER_SIZE > W or Y0 + YB > H:
+    if X0 + CC_TIMER_SIZE > W or Y0 + CC_TIMER_SIZE > H:
         return False
-    BAND = cv2.cvtColor(frame[Y0 + YA:Y0 + YB, X0:X0 + CC_TIMER_SIZE],
+    DISC = cv2.cvtColor(frame[Y0:Y0 + CC_TIMER_SIZE, X0:X0 + CC_TIMER_SIZE],
                         cv2.COLOR_RGB2GRAY)
-    REGION_MIN = BAND[:, CC_TIMER_MIN_X[0]:CC_TIMER_MIN_X[1]]
-    REGION_SEC = BAND[:, CC_TIMER_SEC_X[0]:CC_TIMER_SEC_X[1]]
-    if REGION_MIN.shape != TPL_MIN.shape or REGION_SEC.shape != TPL_SEC.shape:
+    REGION_TOP = DISC[CC_TIMER_TOP_Y[0]:CC_TIMER_TOP_Y[1], :]
+    REGION_BOTTOM = DISC[CC_TIMER_BOTTOM_Y[0]:CC_TIMER_BOTTOM_Y[1], :]
+    if REGION_TOP.shape != TPL_TOP.shape or REGION_BOTTOM.shape != TPL_BOTTOM.shape:
         return False
-    # Les minutes d'abord : elles ne sont à « 00 » que sur la dernière minute,
-    # ce qui écarte l'immense majorité des frames sans toucher aux secondes.
-    if float(cv2.matchTemplate(REGION_MIN, TPL_MIN,
+    # La bande haute d'abord : elle suffit à écarter la quasi-totalité des frames
+    # hors jeu, sans payer le second match.
+    if float(cv2.matchTemplate(REGION_TOP, TPL_TOP,
                                cv2.TM_CCOEFF_NORMED)[0, 0]) < CC_TIMER_MIN_NCC:
         return False
-    return float(cv2.matchTemplate(REGION_SEC, TPL_SEC,
+    return float(cv2.matchTemplate(REGION_BOTTOM, TPL_BOTTOM,
                                    cv2.TM_CCOEFF_NORMED)[0, 0]) >= CC_TIMER_MIN_NCC
 
 
@@ -6122,21 +6132,25 @@ def _analyze(
                 GAMES.insert(0, GAME)
                 CURRENT = GAME
 
-        # ── Color Chaos : chrono à 00:00 = fin de game ──────────────────────
+        # ── Color Chaos : disparition du chrono = fin de game ───────────────
+        # On remonte la vidéo : la première frame AVEC chrono qu'on croise est
+        # donc la dernière de la partie, à un pas de scan près. `_scan_while`
+        # avance ensuite jusqu'à sa disparition exacte.
+        #
+        # Le chrono s'éteint aussi ailleurs — écran de jeu noir quand le flux VR
+        # se perd (relevé : deux trous de ~20 s en pleine partie). Sans effet
+        # ici : ces trous sont AU MILIEU d'une game, donc franchis alors qu'on
+        # cherche déjà son début, branche ci-dessous, celle-ci étant désactivée.
         if not FOUND and (CURRENT is None or CURRENT['start'] != -1):
-            if _detect_color_chaos_timer_zero(FRAME):
+            if _detect_color_chaos_timer_hud(FRAME):
                 if DEBUG:
-                    _emit({'log': 'Color Chaos timer 00:00 found'})
+                    _emit({'log': 'Color Chaos timer HUD found'})
                 FOUND = True
                 JUST_JUMPED = False
                 GAME = _new_game(0, game_type=GAME_TYPE_COLOR_CHAOS)
-                # Le chrono ne reste à 00:00 que ~3 s : on recule d'abord au
-                # début de cette fenêtre, sinon la marge partirait d'un point
-                # qui dépend de l'endroit où le pas de scan est tombé dedans.
                 GAME['end'] = min(
                     _scan_while(
-                        CAP, TIMESTAMP, _detect_color_chaos_timer_zero,
-                        step=-0.5,
+                        CAP, TIMESTAMP, _detect_color_chaos_timer_hud,
                     ) + CC_END_MENU_MARGIN_S,
                     DURATION,
                 )
