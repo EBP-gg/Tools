@@ -657,6 +657,13 @@ _MAPS = {
     'The Rock':       {'aliases': ['rock', 'therock'], 'points': 1},
     'Horizon':        {'aliases': ['horizon'], 'points': 2, 'respawn': 15},
     'Reef Point':     {'aliases': ['reef', 'point', 'reefpoint'], 'points': 1, 'respawn': 15},
+    # Arènes des modes à podium (Chacun pour soi, Solo Gun Game). On ne s'y bat
+    # pas pour des points de capture, d'où `points: 0` : si le détecteur en
+    # trouvait, le garde-fou de `_detect_capture_points_for_map` les rejetterait.
+    # Elles n'ont pas non plus de template de minimap, ce qui ne coûte rien : la
+    # minimap n'est localisée que sur le chemin After-H.
+    'Bastion':        {'aliases': ['bastion'], 'points': 0},
+    'Coliseum':       {'aliases': ['coliseum'], 'points': 0},
 }
 
 # Délai de respawn par défaut (s) pour les maps sans clé `respawn` dans _MAPS.
@@ -4427,11 +4434,17 @@ def _detect_podium_end_frame(frame: np.ndarray) -> bool:
     ) >= PODIUM_MIN_NCC
 
 
-def _read_podium_game_type(frame: np.ndarray) -> Optional[str]:
+def _read_podium_title(frame: np.ndarray):
     """
-    Type de game lu dans le titre « Map - Mode » du podium, None si le mode n'y
-    est pas reconnu — auquel cas la game n'est pas créée : lui donner un type
-    au hasard l'enverrait au mauvais endroit côté salle.
+    Lit le titre « Map - Mode » du podium et en tire le couple (map, type de
+    game). Type à None si le mode n'y est pas reconnu — la game n'est alors pas
+    créée : lui donner un type au hasard l'enverrait au mauvais endroit côté
+    salle. Map à '' si aucun nom connu n'y est reconnu.
+
+    C'est la SEULE source de map de ces modes : le nom écrit dans leur HUD est
+    hors de portée du lecteur habituel, qui dérive sa boîte de la barre
+    d'équipes qu'ils n'ont pas. Le titre, lui, est déjà lu pour le mode — la map
+    ne coûte donc pas un OCR de plus.
     """
     (X1, Y1), (X2, Y2) = PODIUM_TITLE_BOX
     TITLE = _ocr_color_masked(
@@ -4442,10 +4455,12 @@ def _read_podium_game_type(frame: np.ndarray) -> Optional[str]:
     ).lower()
     if DEBUG:
         _emit({'log': f'[podium] title ocr={TITLE!r}'})
-    for LABEL, GAME_TYPE in PODIUM_TITLE_TYPES:
+    GAME_TYPE = None
+    for LABEL, CANDIDATE in PODIUM_TITLE_TYPES:
         if LABEL in TITLE:
-            return GAME_TYPE
-    return None
+            GAME_TYPE = CANDIDATE
+            break
+    return _get_map_by_name(TITLE), GAME_TYPE
 
 
 def _detect_zombies_card(frame: np.ndarray) -> bool:
@@ -6373,7 +6388,7 @@ def _analyze(
         # suivent le même chemin d'identification.
         if not FOUND and (CURRENT is None or CURRENT['start'] != -1):
             if _detect_podium_end_frame(FRAME):
-                PODIUM_TYPE = _read_podium_game_type(FRAME)
+                PODIUM_MAP, PODIUM_TYPE = _read_podium_title(FRAME)
                 if PODIUM_TYPE is None:
                     # Podium d'un mode qu'on ne sait pas nommer : on préfère ne
                     # pas créer la game. Le mode salle écarte de toute façon un
@@ -6383,10 +6398,15 @@ def _analyze(
                         _emit({'log': 'Podium frame found but mode label unknown — ignored'})
                 else:
                     if DEBUG:
-                        _emit({'log': f'Podium frame found ({PODIUM_TYPE})'})
+                        _emit({'log': f'Podium frame found ({PODIUM_TYPE}, map={PODIUM_MAP or "?"})'})
                     FOUND = True
                     JUST_JUMPED = False
                     GAME = _new_game(0, game_type=PODIUM_TYPE)
+                    # Map lue dans le même titre. Le lecteur de map habituel ne
+                    # sait pas la trouver ici (il dérive sa boîte de la barre
+                    # d'équipes), et il ne repassera pas dessus : il ne renseigne
+                    # la map que si elle est encore vide.
+                    GAME['map'] = PODIUM_MAP
                     GAME['end'] = TIMESTAMP - 1
                     GAMES.insert(0, GAME)
                     CURRENT = GAME
