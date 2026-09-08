@@ -436,6 +436,11 @@ ZB_CARD_MIN_MEAN = 40.0
 # (avatar, arme, K/D/A, pseudo) est affiché ; sur un vrai chargement il ne l'est
 # pas encore. Une seule zone à regarder, donc.
 #
+# Écrit pour le Zombies, mais le cartouche est le même dans tous les modes : les
+# modes à podium rejouent eux aussi ce loading à chaque respawn (mesuré 110 sur
+# le cartouche pendant un respawn de Chacun pour soi, 0 sur son vrai
+# chargement), d'où des constantes et un détecteur sans préfixe de jeu.
+#
 # Deux pavés encadraient aussi le logo, sur l'idée que le vrai chargement est posé
 # sur un noir plein alors qu'un respawn laisse transparaître la map. Mesuré, c'est
 # faux : une map sombre (le LAB) donne 4.1 et 12.3 sur un respawn, contre 13.9 et
@@ -444,13 +449,13 @@ ZB_CARD_MIN_MEAN = 40.0
 # rejetaient donc aucun respawn ; ils perdaient des games entières dès que le
 # décor derrière le logo n'était pas parfaitement noir (relevé le 07/09/2026 sur
 # une captation de salle : game vue à 0:00 au lieu de 0:27).
-ZB_LOADING_DARK_BOXES = (
+LOADING_DARK_BOXES = (
     ZB_CARD_BOX,                     # cartouche du joueur, absent au loading
 )
 # Mesuré sur le cartouche : 0.0 à 13.0 sur cinq vrais écrans de loading, 102 à 122
 # sur les trois frames d'un respawn. 50 laisse un facteur ~4 de marge de chaque
 # côté — et il en faut, le fond du cartouche n'est pas noir mais transparent.
-ZB_LOADING_MAX_MEAN = 50.0
+LOADING_MAX_MEAN = 50.0
 
 # Marge de découpe, même esprit qu'en Color Chaos : la game commence 1 s APRÈS la
 # disparition de l'écran de loading et se termine 2 s AVANT celle du tableau
@@ -498,13 +503,71 @@ GG_LABEL_BOX = ((1752, 72), (1868, 104))
 # faudra un template par langue (le reste de la mécanique ne bougerait pas).
 GG_LABEL_MIN_NCC = 0.50
 
+# ── Modes à écran podium ───────────────────────────────────────────────────
+# Le Solo Gun Game et le Chacun pour soi ne finissent PAS sur la score frame
+# After-H : leur écran de fin est un PODIUM (trois joueurs sur socle, le reste
+# en liste dessous) titré « Map - Mode ». Sans détecteur dédié l'analyseur ne
+# voyait aucune fin, donc ne créait aucune game — les deux parties du corpus
+# 2026-08-29 10-39-31.mp4 étaient traversées sans une seule détection.
+#
+# Le `GG_LABEL_BOX` ci-dessus ne couvre pas ce cas : il disqualifie une score
+# frame DÉJÀ trouvée, écran que ces games n'affichent jamais.
+GAME_TYPE_FREE_FOR_ALL = 'free-for-all'
+
+# Décor d'angle en haut à droite du podium : des chevrons gris opaques. C'est
+# la seule zone de l'écran qui ne dépende ni du décor 3D derrière (il change
+# avec la map), ni des skins des trois joueurs, ni du nombre de joueurs listés
+# dessous — ce que ni le podium lui-même ni sa liste ne peuvent promettre.
+PODIUM_BOX = ((1560, 0), (1908, 228))
+# Mesuré ≥ 0.95 sur les deux games du corpus, sur DEUX maps différentes, contre
+# au plus 0.40 partout ailleurs dans les 43 min — score frames After-H, écran
+# VICTOIRE, HUD zombie, menus et loadings compris. Seuil posé au milieu.
+#
+# RÉSERVE, à lever quand le matériel existera : deux games, deux modes, une
+# seule salle. Les autres modes à podium (Match à mort par équipe, Escarmouche)
+# n'ont pas été vus — s'ils partagent ce décor, ils seront détectés puis
+# écartés faute de libellé connu (cf. PODIUM_TITLE_TYPES).
+PODIUM_MIN_NCC = 0.70
+
+# Titre du podium, « Map - Mode ». Il est CENTRÉ : la position du libellé de
+# mode dépend de la longueur du nom de map, on OCR donc toute la bande plutôt
+# que de matcher un template à position fixe comme pour la score frame.
+PODIUM_TITLE_BOX = ((560, 85), (1360, 140))
+# Mode lu dans ce titre → type de game. Le jeu traduit certains libellés
+# (« Chacun pour soi ») et pas d'autres (« Solo Gun Game »), d'où les deux
+# orthographes du FFA ; la comparaison est une INCLUSION, ce qui absorbe au
+# passage le nom de map collé devant et les fins de mot ratées par l'OCR.
+PODIUM_TITLE_TYPES = (
+    ('gun game', GAME_TYPE_GUN_GAME),
+    ('chacun pour soi', GAME_TYPE_FREE_FOR_ALL),
+    ('free for all', GAME_TYPE_FREE_FOR_ALL),
+)
+
+# Modes qui REJOUENT l'écran de loading à chaque respawn, par-dessus la partie
+# en cours — comme le Zombies. Leur début doit donc être cherché avec le test
+# strict (`_detect_loading_frame_strict`), le test simple s'arrêtant sur le
+# premier respawn rencontré. Le jeu d'arme y figure quel que soit l'écran de fin
+# qui l'a fait détecter : c'est une propriété du mode, pas de sa fin.
+RESPAWN_LOADING_TYPES = (GAME_TYPE_GUN_GAME, GAME_TYPE_FREE_FOR_ALL)
+
 # Jeux bornés par le HUD After-H : MÊME écran de loading, même intro de map,
 # même frame de gameplay, même chrono. Seul l'écran de FIN les sépare — et ce
 # qu'on en fait ensuite, une game d'arme n'ayant pas de game EVA à laquelle se
 # rattacher. Que les deux chargements soient identiques n'ambiguïse rien : un
 # loading n'est jamais consulté seul, mais consommé par la game qui attend son
 # début, dont le type est déjà tranché.
-AFTER_H_LIKE_TYPES = (GAME_TYPE_AFTER_H, GAME_TYPE_GUN_GAME)
+#
+# NUANCE pour les modes à podium : leur début se cherche bien par les mêmes
+# écrans (loading, intro), mais leur GAMEPLAY n'est pas reconnu par
+# `_detect_game_playing`, calé sur la barre HUD d'équipes qu'ils n'ont pas.
+# Conséquences, mesurées et assumées : pas de nom de map (le mode salle nomme
+# alors le fichier `unknown`, ce que le resolve traite déjà comme un OCR de map
+# en échec) et pas de bond par le chrono, donc une remontée à 1 s par pas.
+# Ce dernier point ne coûte rien : le test de loading strict de ces modes tranche
+# en 0,2 ms là où le test simple en prend 266, si bien que le corpus de 43 min
+# est scanné en 3:40 avec les deux games à podium contre 5:42 sans.
+AFTER_H_LIKE_TYPES = (GAME_TYPE_AFTER_H, GAME_TYPE_GUN_GAME,
+                      GAME_TYPE_FREE_FOR_ALL)
 
 # A-letter patterns for game intro detection — from detectGameIntro() in the service
 _A_PATTERNS = [
@@ -4232,6 +4295,52 @@ def _detect_gun_game_label(frame: np.ndarray) -> bool:
     ) >= GG_LABEL_MIN_NCC
 
 
+_PODIUM_TEMPLATE_CACHE = {}
+
+
+def _get_podium_template(name: str):
+    """Charge (et cache) un template d'écran podium en niveaux de gris."""
+    if name in _PODIUM_TEMPLATE_CACHE:
+        return _PODIUM_TEMPLATE_CACHE[name]
+    BASE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    PATH = os.path.join(BASE, 'templates', 'podium', name)
+    GRAY = cv2.imread(PATH, cv2.IMREAD_GRAYSCALE) if os.path.isfile(PATH) else None
+    _PODIUM_TEMPLATE_CACHE[name] = GRAY
+    return GRAY
+
+
+def _detect_podium_end_frame(frame: np.ndarray) -> bool:
+    """
+    Est-on sur l'écran podium qui CLÔT une game sans score d'équipe (Solo Gun
+    Game, Chacun pour soi) ? Détection par le décor d'angle, pas par le podium :
+    lui seul est identique d'une map et d'une partie à l'autre.
+    """
+    return _match_fixed_box(
+        frame, PODIUM_BOX, _get_podium_template('end_corner.png')
+    ) >= PODIUM_MIN_NCC
+
+
+def _read_podium_game_type(frame: np.ndarray) -> Optional[str]:
+    """
+    Type de game lu dans le titre « Map - Mode » du podium, None si le mode n'y
+    est pas reconnu — auquel cas la game n'est pas créée : lui donner un type
+    au hasard l'enverrait au mauvais endroit côté salle.
+    """
+    (X1, Y1), (X2, Y2) = PODIUM_TITLE_BOX
+    TITLE = _ocr_color_masked(
+        frame, X1, Y1, X2, Y2,
+        target_color=(255, 255, 255),
+        whitelist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz -',
+        tol_color=60,
+    ).lower()
+    if DEBUG:
+        _emit({'log': f'[podium] title ocr={TITLE!r}'})
+    for LABEL, GAME_TYPE in PODIUM_TITLE_TYPES:
+        if LABEL in TITLE:
+            return GAME_TYPE
+    return None
+
+
 def _detect_zombies_card(frame: np.ndarray) -> bool:
     """
     Le cartouche du joueur est-il affiché en bas à droite ? Vrai ⇔ on est DANS le
@@ -4261,16 +4370,18 @@ def _zombies_playing_at(cap: cv2.VideoCapture, timestamp: float) -> bool:
     return FRAME is not None and _detect_zombies_playing(FRAME)
 
 
-def _detect_zombies_loading_frame(frame: np.ndarray) -> bool:
+def _detect_loading_frame_strict(frame: np.ndarray) -> bool:
     """
-    Détecte l'écran de loading qui OUVRE une game Zombies.
+    Détecte l'écran de loading qui OUVRE une game, dans les modes où il est
+    aussi rejoué à chaque respawn : Zombies et modes à podium.
 
     C'est le même que celui de l'After-H (logo A + barre de progression), mais le
     jeu le réutilise tel quel à chaque respawn de joueur, par-dessus la partie en
     cours : sur les 35 min d'une game, `_detect_game_loading_frame` seul renvoie
     donc plusieurs faux débuts, et la remontée à rebours s'arrête sur le premier
-    venu (constaté : une game de 35 min ramenée à 28). Le vrai écran, lui, est
-    posé sur un noir plein — c'est ce fond qu'on vérifie.
+    venu (constaté : une game de 35 min ramenée à 28, et une game Chacun pour soi
+    de 10 min ramenée à 4:40). Le vrai écran, lui, est posé sur un noir plein —
+    c'est ce fond qu'on vérifie.
 
     L'ordre des deux tests n'est pas indifférent : le fond coûte 0,2 ms, le
     template 180 ms (NCC multi-échelle sur presque tout le frame). Le premier
@@ -4280,10 +4391,10 @@ def _detect_zombies_loading_frame(frame: np.ndarray) -> bool:
     """
     GRAY = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     H, W = GRAY.shape[:2]
-    for (X1, Y1), (X2, Y2) in ZB_LOADING_DARK_BOXES:
+    for (X1, Y1), (X2, Y2) in LOADING_DARK_BOXES:
         if X2 > W or Y2 > H:
             return False
-        if GRAY[Y1:Y2, X1:X2].mean() > ZB_LOADING_MAX_MEAN:
+        if GRAY[Y1:Y2, X1:X2].mean() > LOADING_MAX_MEAN:
             return False
     return _detect_game_loading_frame(frame)
 
@@ -6138,6 +6249,31 @@ def _analyze(
                 GAMES.insert(0, GAME)
                 CURRENT = GAME
 
+        # ── Écran podium = fin d'une game sans score d'équipe ───────────────
+        # Solo Gun Game et Chacun pour soi : pas de score frame, donc rien à en
+        # lire — le podium ne porte que des résultats par joueur. Ces games ont
+        # une game EVA et une map, elles sont donc bornées comme de l'After-H et
+        # suivent le même chemin d'identification.
+        if not FOUND and (CURRENT is None or CURRENT['start'] != -1):
+            if _detect_podium_end_frame(FRAME):
+                PODIUM_TYPE = _read_podium_game_type(FRAME)
+                if PODIUM_TYPE is None:
+                    # Podium d'un mode qu'on ne sait pas nommer : on préfère ne
+                    # pas créer la game. Le mode salle écarte de toute façon un
+                    # `gameType` inconnu, et un type pris au hasard l'enverrait
+                    # au mauvais endroit.
+                    if DEBUG:
+                        _emit({'log': 'Podium frame found but mode label unknown — ignored'})
+                else:
+                    if DEBUG:
+                        _emit({'log': f'Podium frame found ({PODIUM_TYPE})'})
+                    FOUND = True
+                    JUST_JUMPED = False
+                    GAME = _new_game(0, game_type=PODIUM_TYPE)
+                    GAME['end'] = TIMESTAMP - 1
+                    GAMES.insert(0, GAME)
+                    CURRENT = GAME
+
         # ── End frame ──────────────────────────────────────────────────────
         if not FOUND and (CURRENT is None or CURRENT['start'] != -1):
             if _detect_game_end_frame(FRAME):
@@ -6298,7 +6434,7 @@ def _analyze(
         # sont écrits pour le HUD After-H.
         if (not FOUND and CURRENT is not None and CURRENT['start'] == -1
                 and CURRENT['gameType'] == GAME_TYPE_ZOMBIES):
-            if _detect_zombies_loading_frame(FRAME):
+            if _detect_loading_frame_strict(FRAME):
                 if DEBUG:
                     _emit({'log': 'Zombies loading frame found'})
                 FOUND = True
@@ -6306,7 +6442,7 @@ def _analyze(
                 # Dernière frame du loading, plus la marge : la game commence
                 # quand l'écran s'efface.
                 CURRENT['start'] = _scan_while(
-                    CAP, TIMESTAMP, _detect_zombies_loading_frame,
+                    CAP, TIMESTAMP, _detect_loading_frame_strict,
                 ) + ZB_CUT_START_MARGIN_S
                 if DEBUG:
                     _emit({'log': f'Zombies game {CURRENT["start"]:.1f}s → {CURRENT["end"]:.1f}s'})
@@ -6314,9 +6450,20 @@ def _analyze(
                 CURRENT = None
 
         # ── Game start: loading screen ──────────────────────────────────────
+        # Les modes à podium rejouent ce même écran à chaque respawn : pour eux
+        # on exige le test strict (cartouche joueur éteint), sans quoi la
+        # remontée s'arrête sur le premier respawn venu — mesuré sur la game
+        # Chacun pour soi du corpus, début trouvé à 608 s au lieu de 272 s.
+        # L'After-H garde le test simple : son respawn ne repasse pas par un
+        # chargement, et le durcir toucherait le chemin principal sans besoin.
         if (not FOUND and CURRENT is not None and CURRENT['start'] == -1
                 and CURRENT['gameType'] in AFTER_H_LIKE_TYPES):
-            if _detect_game_loading_frame(FRAME):
+            LOADING_TEST = (
+                _detect_loading_frame_strict
+                if CURRENT['gameType'] in RESPAWN_LOADING_TYPES
+                else _detect_game_loading_frame
+            )
+            if LOADING_TEST(FRAME):
                 if DEBUG:
                     _emit({'log': 'Loading frame found'})
                 FOUND = True

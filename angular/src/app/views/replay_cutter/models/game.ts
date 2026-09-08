@@ -46,7 +46,8 @@ export class Game {
   //#endregion
 
   /**
-   * Jeu détecté : 'after-h' (défaut), 'color-chaos', 'zombies' ou 'gun-game'.
+   * Jeu détecté : 'after-h' (défaut), 'color-chaos', 'zombies', 'gun-game' ou
+   * 'free-for-all'.
    *
    * Ce champ ne dit PAS « a-t-elle une identité EVA ? » mais « que trouve-t-on
    * sur son écran de fin ? ». Le jeu d'arme est un mode d'After-H à part

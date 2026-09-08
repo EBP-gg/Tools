@@ -48,13 +48,14 @@ import { ReplayCutterService } from './services/replay-cutter.service';
 const GAME_TYPE_LABEL: Record<string, string> = {
   'color-chaos': 'Color Chaos',
   zombies: 'Zombies',
-  'gun-game': 'Gun Game'
+  'gun-game': 'Gun Game',
+  'free-for-all': 'Chacun pour soi'
 };
 // Modes du jeu After-H : ils ont une map, donc un nom et une vignette à afficher.
 // Le jeu d'arme en fait partie — s'il a son propre type, c'est parce que son écran
 // de fin ne porte pas de scores d'équipe, pas parce qu'il n'aurait pas de map.
 // Color Chaos et Zombies, eux, n'en ont aucune : leur nom en tient lieu.
-const AFTER_H_LIKE_TYPES = new Set(['after-h', 'gun-game']);
+const AFTER_H_LIKE_TYPES = new Set(['after-h', 'gun-game', 'free-for-all']);
 
 @Component({
   selector: 'view-replay_cutter',

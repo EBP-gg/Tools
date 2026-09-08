@@ -81,7 +81,17 @@ const ZOMBIES_IMPLAUSIBLE_GAME_S = 45 * 60;
 // disqualifie pas : le nom porte alors `unknown` et `0-0`, et le resolve traite
 // déjà `unknown` comme « OCR de map en échec » — il désactive le garde-fou map
 // au lieu de refuser. La fin de game suffit à l'identifier.
-const AFTER_H_LIKE_TYPES = new Set(['after-h', 'gun-game', 'zombies']);
+// Le Chacun pour soi (FreeForAll, mode EVA 2) les a rejoints le 07/09/2026 :
+// il a bien une game chez EVA, mais sa fin est un podium par joueur, pas une
+// score frame — d'où ni scores (`0-0`) ni map (`unknown`, l'analyseur ne lit
+// celle-ci que sur le HUD d'équipes qu'il n'a pas), exactement le cas que le
+// resolve sait déjà traiter pour le Zombies.
+const AFTER_H_LIKE_TYPES = new Set([
+    'after-h',
+    'gun-game',
+    'free-for-all',
+    'zombies'
+]);
 // Préfixe du nom de fichier par jeu qui n'est PAS After-H. Ces parties n'ont pas
 // de game chez EVA : rien à identifier, donc un nom qui ne ressemble pas à celui
 // d'une game et une route d'upload à part, où le préfixe dit de quel jeu il
