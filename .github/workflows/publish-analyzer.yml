@@ -75,18 +75,30 @@ jobs:
 
             # Signature en cascade : les dylibs d'abord, l'exécutable ensuite.
             # Elle est embarquée dans le Mach-O, donc elle survit à l'archivage.
+            # `--timestamp` fait un aller-retour chez Apple PAR fichier, et il y
+            # en a plus de 300. Un seul timeout — la machine physique s'assoupit,
+            # le service répond en 10 s au lieu de 0,2 — et `bash -e` faisait
+            # tomber les cinq minutes de build : quatre échecs de suite le
+            # 08/09/2026, chaque fois sur un fichier différent (le 1er, le 4e, le
+            # 216e). À 1 % d'échec par appel, les 300 ne passent que 5 fois sur
+            # 100 ; avec trois tentatives, plus de 99,99 %.
             - name: Sign analyzer
               run: |
+                  sign() {
+                    for TRY in 1 2 3; do
+                      codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
+                        --options runtime --entitlements build/entitlements.plist --timestamp "$1" && return 0
+                      echo "::warning::signature de $1 échouée (tentative $TRY/3), nouvel essai"
+                      sleep 5
+                    done
+                    echo "::error::signature de $1 échouée après 3 tentatives"
+                    return 1
+                  }
                   find binaries/analyzer/darwin -type f \( -name "*.dylib" -o -name "*.so" \) | while read f; do
-                    codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
-                      --options runtime --entitlements build/entitlements.plist --timestamp "$f"
+                    sign "$f" || exit 1
                   done
-                  codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
-                    --options runtime --entitlements build/entitlements.plist --timestamp \
-                    binaries/analyzer/darwin/_internal/tesseract/tesseract
-                  codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
-                    --options runtime --entitlements build/entitlements.plist --timestamp \
-                    binaries/analyzer/darwin/darwin
+                  sign binaries/analyzer/darwin/_internal/tesseract/tesseract
+                  sign binaries/analyzer/darwin/darwin
 
             - name: Publish
               id: publish
@@ -145,18 +157,30 @@ jobs:
                     exit 1
                   }
 
+            # `--timestamp` fait un aller-retour chez Apple PAR fichier, et il y
+            # en a plus de 300. Un seul timeout — la machine physique s'assoupit,
+            # le service répond en 10 s au lieu de 0,2 — et `bash -e` faisait
+            # tomber les cinq minutes de build : quatre échecs de suite le
+            # 08/09/2026, chaque fois sur un fichier différent (le 1er, le 4e, le
+            # 216e). À 1 % d'échec par appel, les 300 ne passent que 5 fois sur
+            # 100 ; avec trois tentatives, plus de 99,99 %.
             - name: Sign analyzer
               run: |
+                  sign() {
+                    for TRY in 1 2 3; do
+                      codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
+                        --options runtime --entitlements build/entitlements.plist --timestamp "$1" && return 0
+                      echo "::warning::signature de $1 échouée (tentative $TRY/3), nouvel essai"
+                      sleep 5
+                    done
+                    echo "::error::signature de $1 échouée après 3 tentatives"
+                    return 1
+                  }
                   find binaries/analyzer/darwin -type f \( -name "*.dylib" -o -name "*.so" \) | while read f; do
-                    codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
-                      --options runtime --entitlements build/entitlements.plist --timestamp "$f"
+                    sign "$f" || exit 1
                   done
-                  codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
-                    --options runtime --entitlements build/entitlements.plist --timestamp \
-                    binaries/analyzer/darwin/_internal/tesseract/tesseract
-                  codesign --force --sign "Developer ID Application: Antoine Duval (5DQ59NSHNB)" \
-                    --options runtime --entitlements build/entitlements.plist --timestamp \
-                    binaries/analyzer/darwin/darwin
+                  sign binaries/analyzer/darwin/_internal/tesseract/tesseract
+                  sign binaries/analyzer/darwin/darwin
 
             # Machine physique : contrairement aux runners GitHub, l'AWS CLI
             # n'y est pas préinstallée. Le binaire se construisait donc jusqu'au
