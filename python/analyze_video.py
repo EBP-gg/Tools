@@ -479,6 +479,24 @@ ZB_PLAY_CONFIRM_S = (5.0, 10.0)
 # que la borne inclut. Mesuré +15 à +17 s sur 14 des 15 games du corpus.
 ZB_END_NO_OUTRO_MARGIN_S = 15.0
 
+# ── Décompte de départ ─────────────────────────────────────────────────────
+# Les deux derniers chiffres du décompte (« 1 » puis « 0 ») s'affichent au
+# centre juste avant l'écran de loading, et ne bougent ni de place ni de taille
+# — un NCC à position fixe suffit (~2 ms), là où le logo A demande une recherche
+# multi-échelle à 191 ms.
+#
+# À quoi ça sert : le loading seul dure ~1,5 s et la remontée marche par pas de
+# 1 s. Décompte + loading forment une plage CONTIGUË de ~3 s (mesuré 56.8→59.8 et
+# 453.6→456.4 sur deux games), qu'un pas de 1 s ne peut plus enjamber.
+COUNTDOWN_BOX = ((640, 379), (1280, 788))
+COUNTDOWN_TEMPLATES = ('loading_logo_1.png', 'loading_logo_0.png')
+# Mesuré sur les 4 débuts de game d'un enregistrement de 38 min : 1.00 pile sur
+# le « 1 » et le « 0 », AU PLUS 0.83 sur les chiffres précédents du même décompte
+# (5, 4, 3, 2 — mêmes formes arrondies) et au plus 0.73 partout ailleurs dans la
+# vidéo. Le seuil est posé pour ne retenir que les deux derniers chiffres : ce
+# sont eux qui touchent l'écran de loading, donc eux qui ferment le trou.
+COUNTDOWN_MIN_NCC = 0.90
+
 # ── Écran VICTOIRE ─────────────────────────────────────────────────────────
 # Dernier écran d'une game After-H AVANT la score frame, qu'il précède de 10 à
 # 15 s. En temps normal il ne sert donc à rien — la remontée croise la score
@@ -2591,6 +2609,38 @@ def _detect_game_loading_frame(frame: np.ndarray) -> bool:
         if mx > best:
             best = mx
     return best > 0.8
+
+
+_COUNTDOWN_CACHE = {}
+
+
+def _get_countdown_template(name: str):
+    """Charge (et cache) un chiffre du décompte de départ, en niveaux de gris."""
+    if name in _COUNTDOWN_CACHE:
+        return _COUNTDOWN_CACHE[name]
+    BASE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    PATH = os.path.join(BASE, 'templates', name)
+    BGR = cv2.imread(PATH) if os.path.isfile(PATH) else None
+    GRAY = cv2.cvtColor(BGR, cv2.COLOR_BGR2GRAY) if BGR is not None else None
+    _COUNTDOWN_CACHE[name] = GRAY
+    return GRAY
+
+
+def _detect_game_countdown_frame(frame: np.ndarray) -> bool:
+    """
+    Détecte les deux derniers chiffres du décompte de départ (« 1 » puis « 0 »),
+    affichés au centre juste AVANT l'écran de loading.
+
+    Sert d'élargisseur de fenêtre pour la recherche du début : le loading seul
+    ne dure que 1,5 s, et la remontée marche par pas de 1 s. Décompte + loading
+    forment une plage CONTIGUË de ~3 s, qu'un pas de 1 s ne peut plus enjamber.
+    """
+    for NAME in COUNTDOWN_TEMPLATES:
+        if _match_fixed_box(
+            frame, COUNTDOWN_BOX, _get_countdown_template(NAME)
+        ) >= COUNTDOWN_MIN_NCC:
+            return True
+    return False
 
 
 _PLAYING_TOP_CACHE = None  # tuple (gray template) ou (None,) si pas chargeable
@@ -6544,7 +6594,10 @@ def _analyze(
                 if CURRENT['gameType'] in RESPAWN_LOADING_TYPES
                 else _detect_game_loading_frame
             )
-            if LOADING_TEST(FRAME):
+            # Décompte OU loading : les deux se suivent sans trou, et c'est cette
+            # plage élargie qui rend la marche à 1 s sûre (cf. COUNTDOWN_BOX). Le
+            # décompte est testé en premier, il coûte 100 fois moins cher.
+            if _detect_game_countdown_frame(FRAME) or LOADING_TEST(FRAME):
                 if DEBUG:
                     _emit({'log': 'Loading frame found'})
                 FOUND = True
