@@ -6625,11 +6625,21 @@ def _analyze(
                     if DEBUG:
                         _emit({'log': 's'})
                     PROBE += 0.5
-                GAME_START = _refine_game_start_with_timer(
-                    CAP, GAME_START,
-                    MODES[CURRENT['mode']]['gameFrame']['timer'],
-                    hud_anchor=HUD_ANCHOR,
-                )
+                # Affinage par le chrono : pour l'After-H seul. Il compense le
+                # trou entre le chargement et le premier tick, et suppose un
+                # chrono lisible. Les modes à podium n'ont ni l'un ni l'autre :
+                # sans barre d'équipes il n'y a pas d'ancre HUD, l'OCR rend du
+                # bruit (« 1748 » lu sur un chrono affichant 7:48) et une seule
+                # lecture plausible suffit à déplacer le début — +41 s relevé sur
+                # un Solo Gun Game. Ils n'y perdent rien : leur marqueur tombe
+                # déjà sur le départ à ±1 s (948 contre 947 attendu sur ce même
+                # jeu d'arme, 272 contre 272 sur une Chacun pour soi).
+                if CURRENT['gameType'] not in RESPAWN_LOADING_TYPES:
+                    GAME_START = _refine_game_start_with_timer(
+                        CAP, GAME_START,
+                        MODES[CURRENT['mode']]['gameFrame']['timer'],
+                        hud_anchor=HUD_ANCHOR,
+                    )
                 CURRENT['start'] = GAME_START
                 if FIRST_PLAYING_FRAME is not None:
                     CURRENT['points'] = _detect_capture_points(FIRST_PLAYING_FRAME, anchor=HUD_ANCHOR)
