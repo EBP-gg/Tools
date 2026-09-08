@@ -6641,8 +6641,18 @@ def _analyze(
                 CURRENT = None   # game complete
 
         # ── Game start: map introduction ────────────────────────────────────
+        # Repli de l'After-H seul. Le test ne regarde que 5 pixels clairs et deux
+        # pixels « sombres » à tolérance 200 — autant dire rien : une arête
+        # blanche du décor au bon endroit suffit. Sur une game Chacun pour soi,
+        # une seule frame de gameplay l'a déclenché à 652,8 s et a fermé la game
+        # là, au lieu de son vrai début à 107 s — 10 min ramenées à 1.
+        #
+        # Les modes à podium n'y perdent rien : leur début est marqué par le
+        # décompte PUIS le loading, deux signaux nets et contigus, alors que ces
+        # motifs-là sont ceux de l'intro de map d'une game After-H.
         if (not FOUND and CURRENT is not None and CURRENT['start'] == -1
-                and CURRENT['gameType'] in AFTER_H_LIKE_TYPES):
+                and CURRENT['gameType'] in AFTER_H_LIKE_TYPES
+                and CURRENT['gameType'] not in RESPAWN_LOADING_TYPES):
             if _detect_game_intro(FRAME):
                 if DEBUG:
                     _emit({'log': 'Game intro frame found'})
