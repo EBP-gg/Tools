@@ -479,6 +479,27 @@ ZB_PLAY_CONFIRM_S = (5.0, 10.0)
 # que la borne inclut. Mesuré +15 à +17 s sur 14 des 15 games du corpus.
 ZB_END_NO_OUTRO_MARGIN_S = 15.0
 
+# ── Écran VICTOIRE ─────────────────────────────────────────────────────────
+# Dernier écran d'une game After-H AVANT la score frame, qu'il précède de 10 à
+# 15 s. En temps normal il ne sert donc à rien — la remontée croise la score
+# frame d'abord. Il est le seul filet quand celle-ci manque : capture coupée, ou
+# opérateur qui quitte l'écran de fin avant qu'elle s'affiche (relevé le
+# 27/08/2026, VICTOIRE affiché 3 s puis retour au menu — la game entière était
+# perdue faute de toute autre borne).
+#
+# Le mot lui-même est ce qu'il y a de plus stable : le fond est la map (donc il
+# change du tout au tout), les bandes obliques et le nom d'équipe prennent la
+# couleur du vainqueur, mais le bandeau blanc ne bouge pas. Cadré à gauche du
+# mot : la droite de l'écran est mangée par l'incrustation caméra en salle.
+VICTORY_BOX = ((560, 380), (1060, 660))
+# Mesuré sur les 4 games d'un enregistrement de 35 min : 0.978 à 1.000 sur les
+# écrans VICTOIRE (deux couleurs d'équipe, quatre maps), contre AU PLUS 0.246
+# partout ailleurs — gameplay, score frames, loadings, menus. Seuil au milieu.
+#
+# RÉSERVE : c'est du TEXTE, donc du français. Si une salle passe le jeu en
+# anglais il faudra un template par langue, comme pour le libellé « Gun Game ».
+VICTORY_MIN_NCC = 0.60
+
 # ── Jeu d'arme ─────────────────────────────────────────────────────────────
 # Le seul des « autres jeux » à se présenter comme de l'After-H : même HUD
 # orange/bleu, même écran de loading, et un écran final que le détecteur de
@@ -4295,6 +4316,31 @@ def _detect_gun_game_label(frame: np.ndarray) -> bool:
     ) >= GG_LABEL_MIN_NCC
 
 
+_VICTORY_TEMPLATE_CACHE = {}
+
+
+def _get_victory_template(name: str):
+    """Charge (et cache) un template de l'écran VICTOIRE en niveaux de gris."""
+    if name in _VICTORY_TEMPLATE_CACHE:
+        return _VICTORY_TEMPLATE_CACHE[name]
+    BASE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    PATH = os.path.join(BASE, 'templates', 'victory', name)
+    GRAY = cv2.imread(PATH, cv2.IMREAD_GRAYSCALE) if os.path.isfile(PATH) else None
+    _VICTORY_TEMPLATE_CACHE[name] = GRAY
+    return GRAY
+
+
+def _detect_victory_frame(frame: np.ndarray) -> bool:
+    """
+    Est-on sur l'écran VICTOIRE qui annonce la fin d'une game After-H ? Sert de
+    borne de fin de secours quand la score frame qui le suit n'a pas été
+    enregistrée.
+    """
+    return _match_fixed_box(
+        frame, VICTORY_BOX, _get_victory_template('end_banner.png')
+    ) >= VICTORY_MIN_NCC
+
+
 _PODIUM_TEMPLATE_CACHE = {}
 
 
@@ -6391,6 +6437,30 @@ def _analyze(
                     _emit({'log': f'Zombies gameplay runs to {PLAY_END:.0f}s, '
                                   f'past the end of a {DURATION:.0f}s capture — '
                                   f'game still in progress, not emitted'})
+
+        # ── Écran VICTOIRE = fin de game, en secours de la score frame ──────
+        # L'écran VICTOIRE précède la score frame de 10 à 15 s : en temps normal
+        # la remontée croise celle-ci d'abord, la game est donc déjà ouverte
+        # quand on l'atteint et cette branche ne se déclenche jamais. Elle ne
+        # sert que quand la score frame manque — capture coupée, ou opérateur qui
+        # quitte l'écran de fin avant qu'elle s'affiche. Sans elle la game est
+        # perdue en entier, alors que sa fin est bel et bien à l'écran.
+        #
+        # Placée APRÈS les fins Zombies, dont l'outro affiche le même bandeau :
+        # c'est leur détecteur qui doit trancher en premier.
+        if not FOUND and (CURRENT is None or CURRENT['start'] != -1):
+            if _detect_victory_frame(FRAME):
+                if DEBUG:
+                    _emit({'log': 'Victory frame found (no score frame)'})
+                FOUND = True
+                JUST_JUMPED = False
+                # Pas de scores d'équipe : ils ne se lisent que sur la score
+                # frame, justement absente. Le mode salle nommera donc le
+                # fichier `0-0`, comme il le fait déjà pour une game Zombies.
+                GAME = _new_game(0)
+                GAME['end'] = TIMESTAMP - 1
+                GAMES.insert(0, GAME)
+                CURRENT = GAME
 
         # ── Zombies : remontée par bonds tant qu'on est en plein jeu ────────
         # Une game dure 30 à 35 min qu'il serait absurde de remonter seconde par
