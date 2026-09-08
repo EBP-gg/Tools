@@ -511,18 +511,29 @@ VICTORY_MIN_NCC = 0.60
 # donc pas un nouvel écran, on DISQUALIFIE celui qu'on a déjà trouvé.
 GAME_TYPE_GUN_GAME = 'gun-game'
 
-# Libellé du mode sur l'écran final, cadré au plus près des lettres : le fond
-# est la vue aérienne de la map, donc il change d'une partie à l'autre.
+# Libellé du mode sur l'écran final, cadré au plus près des lettres. Le fond est
+# la vue aérienne de la map, donc il change d'une partie à l'autre : le template
+# est DÉTOURÉ (lettres sur noir plein) pour que ce soit le texte qui vote et pas
+# le décor. Sa première version, découpée avec son fond de Reef Point, gonflait
+# le score de toutes les fins jouées sur cette map — une Domination y montait à
+# 0.604 pour un seuil à 0.50, et sa game partait en jeu d'arme (relevé le
+# 07/09/2026 sur un enregistrement de 2 h 16).
 GG_LABEL_BOX = ((1752, 72), (1868, 104))
-# Mesuré 1.00 et 0.75 sur les deux enregistrements disponibles, contre au plus
-# 0.27 sur une vraie score frame After-H, sur du gameplay et sur les autres
-# jeux. Le seuil est posé au milieu de cet écart.
+# Mesuré avec le template détouré, sur 26 score frames de Domination couvrant
+# toutes les maps du corpus et sur les 2 seuls jeux d'arme qui affichent une
+# score frame : 0.768 et 0.936 côté jeu d'arme, AU PLUS 0.548 côté Domination
+# (Silva ; Reef Point y retombe à 0.425). Seuil au milieu de cet écart.
 #
-# DEUX RÉSERVES, à lever quand le matériel existera. Les deux enregistrements
-# sont sur la MÊME map (Reef Point), donc sur le seul fond testé — d'où le 0.75
-# plutôt qu'un 0.95. Et le libellé est du TEXTE : si le jeu le traduit, il
-# faudra un template par langue (le reste de la mécanique ne bougerait pas).
-GG_LABEL_MIN_NCC = 0.50
+# Attention en cas de retouche du template : le seuil ne se transporte pas d'une
+# version à l'autre. Avec l'ancien découpage, les mêmes Domination plafonnaient à
+# 0.447 (hors Reef Point) — un seuil calé sur l'un est faux pour l'autre.
+#
+# RÉSERVES. Deux positifs seulement, et le libellé est du TEXTE : si le jeu le
+# traduit, il faudra un template par langue (le reste ne bougerait pas). Ce test
+# ne concerne d'ailleurs que les jeux d'arme qui FINISSENT sur une score frame —
+# ceux qui finissent sur un podium sont reconnus par `_detect_podium_end_frame`,
+# sans jamais passer par ici.
+GG_LABEL_MIN_NCC = 0.65
 
 # ── Modes à écran podium ───────────────────────────────────────────────────
 # Le Solo Gun Game et le Chacun pour soi ne finissent PAS sur la score frame
