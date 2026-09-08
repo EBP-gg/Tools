@@ -6201,6 +6201,16 @@ def _refine_game_start_with_timer(cap, base_ts: float, timer_box,
             _emit({'log': f'[refine_start] ts={TS:.1f}s offset=+{OFFSET}s box={BOX_KIND} ocr={TIMER_TEXT!r} → unparseable (skip)'})
             continue
         M, S = MS
+        # Minute invraisemblable : `_parse_timer_text` accepte jusqu'à 99, ce
+        # qui laisse passer du bruit d'OCR pur — « 9357 » lu comme 93:57. Le
+        # saut par chrono borne déjà à TIMER_MAX_PLAUSIBLE_MIN, on fait pareil
+        # ici. Sans ce garde-fou, une seule lecture aberrante suffit à décaler
+        # le début : relevé sur une game Chacun pour soi, dont le HUD sans
+        # barre d'équipes prive l'OCR d'ancre et lui fait lire n'importe quoi —
+        # début reculé de 28 s sur la foi d'un « 93:57 ».
+        if M > TIMER_MAX_PLAUSIBLE_MIN:
+            _emit({'log': f'[refine_start] ts={TS:.1f}s offset=+{OFFSET}s box={BOX_KIND} ocr={TIMER_TEXT!r} parsed={M}:{S:02d} → minute invraisemblable (skip)'})
+            continue
         if S == 0:
             _emit({'log': f'[refine_start] ts={TS:.1f}s offset=+{OFFSET}s box={BOX_KIND} ocr={TIMER_TEXT!r} parsed={M}:{S:02d} → S=0, timer figé ou pile minute (skip)'})
             continue
