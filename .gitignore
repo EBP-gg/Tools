@@ -19,6 +19,7 @@ ZERO_CHECK.vcxproj.filters
 x64
 windows.dir
 Debug
+python/__pycache__/*
 
 # ANGULAR
 
