@@ -13,6 +13,7 @@ const {
     downloadPresignedUrlToFile,
     ApiError
 } = require('./tools-api-client');
+const { probeVideoDuration } = require('./video-service');
 const {
     createFloatingWindow,
     deleteFloatingWindow,
@@ -32,12 +33,17 @@ const {
 // à la fois le credential et l'interrupteur. Aucune UI, aucun réglage — c'est un
 // mode d'exploitation, pas une fonctionnalité utilisateur.
 //
-// Le pipeline est celui du watch folder, amputé de ses deux étapes fragiles :
+// Le pipeline est celui du watch folder, amputé de ses trois étapes fragiles :
 //   - pas de `/identify` : la game est désignée par le serveur (le nom de l'objet
 //     S3 porte son guid), donc aucun risque d'attacher l'analyse à la mauvaise ;
-//   - pas de découpe ni d'upload : la vidéo EST une game, et elle est déjà en S3.
-// Reste : phase 1 (bornes réelles de la game dans le fichier) puis phase 2 (OCR +
-// tracking), avec les rosters trustés fournis par le serveur.
+//   - pas de découpe ni d'upload : la vidéo EST une game, et elle est déjà en S3 ;
+//   - pas de phase 1 : la vidéo a déjà été découpée SUR la game par le PC de salle
+//     (arena-pipeline-service, marge de 1 s de part et d'autre), donc ses bornes
+//     sont le fichier lui-même. La relancer ici ne ré-estimerait que du connu, et
+//     mal : la loading frame est hors de la découpe, le scan à rebours tombe donc
+//     dans son repli « vidéo pré-coupée ». Tout ce qu'elle apportait d'autre est
+//     déjà servi par le serveur (map) ou constant (index MODES, cf. CHUNK).
+// Reste la phase 2 (OCR + tracking), avec les rosters trustés fournis par le serveur.
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 // Games traitées de front — la machine est dédiée à ça. Un process Python par game
@@ -49,13 +55,17 @@ const CONCURRENCY = 3;
 // Au-delà, la vidéo n'est pas une game de salle plausible — on ne lance pas une
 // analyse de plusieurs heures sur un fichier aberrant.
 const MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024;
+// Même borne que le MAX_GAME_S du pipeline de salle (12 min configurables + marge
+// de pause technique) : un fichier plus long n'est pas une game découpée, c'est un
+// fichier qu'on ne sait pas lire. Sans phase 1 pour le dire, c'est ce garde-fou qui
+// tient — la borne en octets, elle, laisse passer près d'une heure de vidéo.
+const MAX_GAME_SECONDS = 15 * 60;
 
 // Bandes de la barre de progression PAR GAME (0-100), assemblée à partir des
 // phases de `processGame`. Calées sur les durées observées : le téléchargement
-// d'une game de salle prend environ un tiers du temps total, la détection est
-// brève, l'analyse profonde domine.
+// d'une game de salle prend environ un tiers du temps total, l'analyse profonde
+// domine le reste.
 const PROGRESS_DOWNLOAD_END = 35;
-const PROGRESS_DETECT_END = 50;
 
 let running = false;
 let timer = null;
@@ -181,55 +191,32 @@ async function processGame(game, systemKey) {
             return false;
         }
 
-        // Phase 1 — bornes réelles de la game dans le fichier. La captation de salle
-        // déborde de part et d'autre (pré-game, écran de score), et c'est aussi elle
-        // qui détecte le mode : ces valeurs ne peuvent pas venir de la base.
-        const DETECT = await deps.runAnalyzer(
-            VIDEO_PATH,
-            null,
-            {},
-            false,
-            false,
-            (percent) =>
-                setGameProgress(
-                    game.gameId,
-                    PROGRESS_DOWNLOAD_END +
-                        ((PROGRESS_DETECT_END - PROGRESS_DOWNLOAD_END) *
-                            percent) /
-                            100
-                )
-        );
-        if (DETECT.type === 'error') {
-            console.warn(`[system-worker] ${game.gameId} : phase 1 en échec — ${DETECT.message}`);
+        // Bornes de la game = le fichier entier (cf. en-tête : il a été découpé sur
+        // la game par le PC de salle). Seule la durée reste à lire, et elle sert
+        // autant de garde-fou que de borne de fin.
+        const DURATION = await probeVideoDuration(VIDEO_PATH);
+        if (!(DURATION > 0) || DURATION > MAX_GAME_SECONDS) {
+            console.warn(`[system-worker] ${game.gameId} : durée inattendue (${Math.round(DURATION)} s), ignorée`);
             return false;
         }
-        // La game à pré-analyser vient de la base (donc After-H) : les games
-        // d'un autre jeu vues dans la vidéo sont forcément du voisinage de
-        // captation, jamais celle qu'on traite.
-        const DETECTED = (DETECT.games || []).filter(
-            (g) => (g.gameType ?? 'after-h') === 'after-h'
-        );
-        if (DETECTED.length === 0) {
-            console.warn(`[system-worker] ${game.gameId} : aucune game détectée dans la vidéo`);
-            return false;
-        }
-        // Une vidéo de salle = une game. Si la détection en voit plusieurs (bornes
-        // douteuses), on garde la plus longue : c'est la game, les autres sont des
-        // résidus de la game voisine.
-        const MAIN = DETECTED.reduce((a, b) => (b.end - b.start > a.end - a.start ? b : a));
         console.log(
-            `[system-worker] ${game.gameId} — analyse en cours (${Math.round(MAIN.end - MAIN.start)} s de jeu)`
+            `[system-worker] ${game.gameId} — analyse en cours (${Math.round(DURATION)} s de vidéo)`
         );
 
         // Phase 2 — OCR + tracking. Le serveur fournit ce que le chemin client obtient
         // de /identify : rosters trustés (fuzzy match des pseudos du killfeed) et
         // scores officiels (bornes hautes de l'OCR in-game).
         const CHUNK = {
-            startSeconds: MAIN.start,
-            endSeconds: MAIN.end,
+            startSeconds: 0,
+            endSeconds: Math.floor(DURATION),
             gameID: String(game.gameId),
-            mode: MAIN.mode,
-            map: MAIN.map || game.map || '',
+            // Index dans MODES (géométrie du HUD After-H), qui n'a qu'une entrée —
+            // et le serveur ne sert que des games After-H. Constant, donc.
+            mode: 0,
+            // La map vient de la base EVA, pas d'un OCR : c'est elle qui fait
+            // autorité. Elle décide côté Python de la règle de reconstruction des
+            // scores (Outlaw = Hardpoint, le reste = Domination).
+            map: game.map || '',
             orangeScore: game.orangeScore,
             blueScore: game.blueScore,
             orangePlayers: game.orangePlayers || [],
@@ -244,8 +231,8 @@ async function processGame(game, systemKey) {
             (p) =>
                 setGameProgress(
                     game.gameId,
-                    PROGRESS_DETECT_END +
-                        ((100 - PROGRESS_DETECT_END) * p.percent) / 100
+                    PROGRESS_DOWNLOAD_END +
+                        ((100 - PROGRESS_DOWNLOAD_END) * p.percent) / 100
                 )
         );
         if (RESULTS && RESULTS.error) {
@@ -320,13 +307,13 @@ async function tick(systemKey) {
 /**
  * Démarre le worker si la clé système est configurée. No-op sinon : c'est le cas
  * normal sur toutes les installations de Tools sauf la machine dédiée.
- * @param {object} d { runAnalyzer, runChunkAnalyzer } — mêmes runners que le watch folder.
+ * @param {object} d { runChunkAnalyzer } — même runner de phase 2 que le watch folder.
  */
 function start(d) {
     const KEY = (process.env.TOOLS_SYSTEM_KEY || '').trim();
     if (!KEY) return;
-    if (!d || !d.runAnalyzer || !d.runChunkAnalyzer) {
-        throw new Error('system-worker-service.start: missing runAnalyzer/runChunkAnalyzer deps');
+    if (!d || !d.runChunkAnalyzer) {
+        throw new Error('system-worker-service.start: missing runChunkAnalyzer dep');
     }
     deps = d;
     purgeWorkDir();

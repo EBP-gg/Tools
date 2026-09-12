@@ -17,6 +17,33 @@ const { unlinkSync, lowerProcessPriority } = require('./global-service');
 //#endregion
 
 /**
+ * Durée d'une vidéo, en secondes. Lue dans la ligne `Duration:` que ffmpeg écrit
+ * sur stderr quand on lui donne une entrée sans sortie : pas de ffprobe embarqué
+ * dans `binaries/`, et cette ligne suffit.
+ * @param inputPath Path to the video file.
+ * @returns {Promise<number>} Duration in seconds.
+ */
+function probeVideoDuration(inputPath /* string */) {
+    return new Promise((resolve, reject) => {
+        const PROBE = spawn(FFMPEG_PATH, ['-i', inputPath]);
+
+        let stderr = '';
+        PROBE.stderr.on('data', (d) => (stderr += d.toString()));
+        PROBE.on('error', reject);
+
+        PROBE.on('close', () => {
+            // Duration: 00:01:23.45, start: 0.000000, bitrate: ...
+            const MATCH = stderr.match(/Duration:\s(\d+):(\d+):(\d+\.\d+)/);
+            if (!MATCH) {
+                reject(new Error(`Duration not found: ${inputPath}`));
+                return;
+            }
+            resolve(+MATCH[1] * 3600 + +MATCH[2] * 60 + parseFloat(MATCH[3]));
+        });
+    });
+}
+
+/**
  * Upscales a video to 1920x1080 resolution using FFmpeg with progress tracking.
  * Sends real-time progress updates to the main window.
  * @param inputPath Path to the source video file to upscale.
@@ -795,6 +822,7 @@ function renderTeamScoreImage(
 }
 
 module.exports = {
+    probeVideoDuration,
     changeVideoResolution,
     removeBorders,
     fixForBrowser,

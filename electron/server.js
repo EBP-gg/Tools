@@ -2130,7 +2130,7 @@ if (!APP_GOT_THE_LOCK) {
         // TOOLS_SYSTEM_KEY dans l'environnement, donc inerte partout sauf sur la
         // machine dédiée.
         try {
-            systemWorkerService.start({ runAnalyzer, runChunkAnalyzer });
+            systemWorkerService.start({ runChunkAnalyzer });
         } catch (e) {
             console.error('[system-worker] failed to start', e);
         }
