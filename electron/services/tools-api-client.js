@@ -348,6 +348,43 @@ function sendArenaHeartbeat(payload, arenaToken) {
 }
 
 /**
+ * POST /api/tools/arena/files/upload-url
+ * URL présignée PUT pour honorer un ordre de remontée reçu dans la réponse au
+ * heartbeat : un admin réclame un fichier resté dans spool/ ou games/. Tools
+ * n'envoie que l'id de l'ordre — c'est le serveur qui nomme l'objet, donc une
+ * salle ne peut écrire que sur la copie qu'on lui a demandée.
+ *
+ * @param {{roomId:number, arenaId:number, requestId:string}} payload
+ * @param {string} arenaToken
+ * @returns {Promise<{url:string}>}
+ */
+function requestArenaFileUploadUrl(payload, arenaToken) {
+    return apiRequest('POST', '/arena/files/upload-url', payload, {
+        retries: 1,
+        requireAuth: false,
+        headers: { 'X-Arena-Token': arenaToken }
+    });
+}
+
+/**
+ * POST /api/tools/arena/files/result
+ * Issue de l'ordre : `available: true` après un PUT réussi (le serveur vérifie
+ * l'objet avant de clore), `available: false` si le fichier a disparu du disque
+ * — sans ce retour, un segment consommé par le pipeline entre la demande et
+ * l'ordre serait réclamé indéfiniment.
+ *
+ * @param {{roomId:number, arenaId:number, requestId:string, available:boolean}} payload
+ * @param {string} arenaToken
+ */
+function reportArenaFileResult(payload, arenaToken) {
+    return apiRequest('POST', '/arena/files/result', payload, {
+        retries: 1,
+        requireAuth: false,
+        headers: { 'X-Arena-Token': arenaToken }
+    });
+}
+
+/**
  * POST /api/tools/arena/games/resolve
  * Demande à EBP l'identité EVA d'une game découpée localement : match sur
  * (arène du token, fin de game ±3 min) avec la map en garde-fou. EBP est la
@@ -811,6 +848,8 @@ module.exports = {
     registerArena,
     getArenaLocations,
     sendArenaHeartbeat,
+    requestArenaFileUploadUrl,
+    reportArenaFileResult,
     requestArenaUploadUrl,
     requestOtherGameUploadUrl,
     confirmOtherGameUpload,

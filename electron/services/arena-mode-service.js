@@ -5,9 +5,16 @@
 //#region Imports
 
 const fs = require('fs');
+const path = require('node:path');
 const chokidar = require('chokidar');
 const StorageManager = require('../core/storage-manager');
-const { registerArena, sendArenaHeartbeat } = require('./tools-api-client');
+const {
+    registerArena,
+    sendArenaHeartbeat,
+    requestArenaFileUploadUrl,
+    reportArenaFileResult,
+    uploadFileToPresignedUrl
+} = require('./tools-api-client');
 const { version: TOOLS_VERSION } = require('../../package.json');
 
 //#endregion
@@ -39,6 +46,10 @@ let lastUpdateAttemptAt = 0;
 // Fournisseur de l'état local remonté dans le battement (posé par server.js) :
 // évite un require croisé, arena-pipeline-service requérant déjà ce module.
 let statusProvider = null;
+// Un ordre de remontée à la fois : le serveur n'en envoie qu'un par battement,
+// mais les battements sont désormais déclenchés par les changements de fichier —
+// sans ce verrou, un ordre lent serait relancé en parallèle de lui-même.
+let fetchInFlight = false;
 // Callback d'exécution d'une mise à jour ordonnée par l'admin (posé par
 // server.js : stop captation propre puis UpdateService.forceUpdate()).
 let updateHandler = null;
@@ -110,7 +121,9 @@ function sendHeartbeat() {
         STATE.token
     )
         .then((res) => {
-            if (!res || !res.update || !updateHandler) return;
+            if (!res) return;
+            if (res.fetch) handleFetchOrder(res.fetch, STATE);
+            if (!res.update || !updateHandler) return;
             if (Date.now() - lastUpdateAttemptAt < UPDATE_ATTEMPT_COOLDOWN_MS) {
                 return;
             }
@@ -121,6 +134,70 @@ function sendHeartbeat() {
         .catch((e) =>
             console.warn('[arena-mode] heartbeat failed:', e.message)
         );
+}
+
+/**
+ * Honore un ordre de remontée : un admin réclame un fichier de spool/ ou games/,
+ * que le serveur ne peut pas venir chercher (le PC de salle n'est joignable par
+ * personne). Le fichier part vers une zone S3 temporaire d'où l'admin le
+ * télécharge.
+ *
+ * Le nom reçu est cherché dans le `readdir` du dossier plutôt que joint au
+ * chemin : le serveur ne désigne jamais un fichier du disque, il ne peut que
+ * nommer quelque chose que la salle a elle-même annoncé. Un nom inconnu (segment
+ * déjà consommé par le pipeline, game partie à l'upload) clôt l'ordre côté
+ * serveur au lieu de le laisser revenir indéfiniment.
+ *
+ * Best-effort : toute erreur laisse l'ordre `pending`, et le battement suivant
+ * le représente.
+ */
+function handleFetchOrder(order, state) {
+    if (fetchInFlight || !statusProvider) return;
+    const DIR =
+        order.folder === 'spool'
+            ? statusProvider().spoolFolder
+            : order.folder === 'games'
+              ? statusProvider().gamesFolder
+              : null;
+    if (!DIR) return;
+
+    fetchInFlight = true;
+    const PAYLOAD = {
+        roomId: state.roomId,
+        arenaId: state.arenaId,
+        requestId: order.id
+    };
+    Promise.resolve()
+        .then(async () => {
+            if (!listFiles(DIR).includes(order.name)) {
+                console.log(
+                    `[arena-mode] fetch ${order.folder}/${order.name}: file is gone`
+                );
+                await reportArenaFileResult(
+                    { ...PAYLOAD, available: false },
+                    state.token
+                );
+                return;
+            }
+            console.log(
+                `[arena-mode] fetch ${order.folder}/${order.name}: uploading`
+            );
+            const RES = await requestArenaFileUploadUrl(PAYLOAD, state.token);
+            await uploadFileToPresignedUrl(RES.url, path.join(DIR, order.name), {
+                contentType: 'application/octet-stream'
+            });
+            await reportArenaFileResult(
+                { ...PAYLOAD, available: true },
+                state.token
+            );
+            console.log(`[arena-mode] fetch ${order.name}: done`);
+        })
+        .catch((e) =>
+            console.warn('[arena-mode] fetch order failed:', e.message)
+        )
+        .finally(() => {
+            fetchInFlight = false;
+        });
 }
 
 /**
