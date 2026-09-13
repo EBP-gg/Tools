@@ -227,12 +227,50 @@ function listClosedRuns() {
 }
 
 /**
- * Traite un run : concatène les segments au-dessus du watermark, lance la
- * phase 1 de détection, découpe chaque game complète non déjà extraite, puis
- * avance le watermark et purge les segments consommés.
+ * Supprime les segments d'un run entièrement passés sous le watermark : il est
+ * monotone, donc ce qui est dessous est extrait ou périmé, définitivement.
+ *
+ * Appelée AU DÉBUT de `processRun`, avant sa sortie anticipée, et c'est tout
+ * l'intérêt : un run intégralement consommé n'a plus rien à analyser mais a
+ * toujours ses fichiers sur le disque. La purge vivait en fin de fonction, donc
+ * après ce `return`, et ces runs-là n'étaient jamais nettoyés — chaque ARRÊT de
+ * captation laissait derrière lui sa queue (les 3 ou 4 segments encore au-dessus
+ * du watermark au moment de l'arrêt, que le run suivant faisait passer dessous).
+ * Relevé à Rouen le 13/09/2026 : une semaine de restes, du 06 au 12/09.
+ *
+ * Corollaire du déplacement : les segments consommés pendant CE round ne partent
+ * qu'au round suivant, soit 5 min plus tard. Sans effet — le spool est
+ * dimensionné pour un quart d'heure de captation.
+ */
+function purgeConsumedSegments(run) {
+    for (const SEG of run) {
+        const SEG_END =
+            SEG.epoch + arenaCaptureService.getStatus().segmentSeconds;
+        if (SEG_END < watermark - PURGE_MARGIN_S) {
+            try {
+                fs.unlinkSync(SEG.path);
+                console.log(
+                    `[arena-pipeline] purged ${path.basename(SEG.path)}`
+                );
+            } catch (e) {
+                console.error(
+                    '[arena-pipeline] purge failed:',
+                    SEG.path,
+                    e.message
+                );
+            }
+        }
+    }
+}
+
+/**
+ * Traite un run : purge ce qui est déjà consommé, concatène les segments
+ * au-dessus du watermark, lance la phase 1 de détection, découpe chaque game
+ * complète non déjà extraite, puis avance le watermark.
  */
 async function processRun(run) {
     const STATE = arenaModeService.getState();
+    purgeConsumedSegments(run);
     // Segments utiles : ceux qui peuvent encore contenir de l'inextrait.
     const SEGMENTS = run.filter(
         (s) =>
@@ -415,26 +453,6 @@ async function processRun(run) {
             ? Math.min(CANDIDATE, deferredStartEpoch - 1)
             : CANDIDATE
     );
-
-    // Purge : segments entièrement sous le watermark (avec marge).
-    for (const SEG of run) {
-        const SEG_END =
-            SEG.epoch + arenaCaptureService.getStatus().segmentSeconds;
-        if (SEG_END < watermark - PURGE_MARGIN_S) {
-            try {
-                fs.unlinkSync(SEG.path);
-                console.log(
-                    `[arena-pipeline] purged ${path.basename(SEG.path)}`
-                );
-            } catch (e) {
-                console.error(
-                    '[arena-pipeline] purge failed:',
-                    SEG.path,
-                    e.message
-                );
-            }
-        }
-    }
 
     try {
         fs.unlinkSync(WINDOW_PATH);
