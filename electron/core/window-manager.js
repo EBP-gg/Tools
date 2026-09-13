@@ -14,6 +14,7 @@ const {
     nativeTheme,
     shell
 } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 const { setupConsoleRedirection } = require('./console-manager');
 const {
@@ -28,6 +29,8 @@ const {
 } = require('../config/constants');
 const watchFolderService = require('../services/watch-folder-service');
 const arenaCaptureService = require('../services/arena-capture-service');
+const arenaModeService = require('../services/arena-mode-service');
+const arenaPipelineService = require('../services/arena-pipeline-service');
 const telemetryService = require('../services/telemetry-service');
 const StorageManager = require('./storage-manager');
 
@@ -441,10 +444,25 @@ function createWindow(updateService) {
                     updateService.autoUpdate(false);
                 }
             },
-            {
-                label: `Replay analysis (${STATUS.processing.length}, ${STATUS.queued.length}, ${STATUS.failed.length})`,
-                submenu: buildReplaysSubmenu(STATUS)
-            }
+            // Mode salle : le watch-folder n'y sert pas (rien n'est déposé à la
+            // main sur un PC de salle), l'entrée utile est le dossier des games
+            // découpées que le backend n'a pas su rattacher à une partie EVA.
+            arenaModeService.getState().registered
+                ? {
+                      label: 'Unmatched games',
+                      click: () => {
+                          const GAMES =
+                              arenaPipelineService.getStatus().gamesFolder;
+                          if (!fs.existsSync(GAMES)) {
+                              fs.mkdirSync(GAMES, { recursive: true });
+                          }
+                          shell.openPath(GAMES);
+                      }
+                  }
+                : {
+                      label: `Replay analysis (${STATUS.processing.length}, ${STATUS.queued.length}, ${STATUS.failed.length})`,
+                      submenu: buildReplaysSubmenu(STATUS)
+                  }
         ]);
     }
 
