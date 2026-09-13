@@ -139,6 +139,17 @@ arenaModeService.setUpdateHandler(() => {
     arenaCaptureService.stopCapture();
     UPDATE_SERVICE.forceUpdate();
 });
+// État local remonté par le battement (captation + contenu de spool/ et
+// games/). Posé ici plutôt que requis par arena-mode-service : le pipeline
+// requiert déjà ce dernier, un require croisé serait circulaire.
+arenaModeService.setStatusProvider(() => {
+    const CAPTURE = arenaCaptureService.getStatus();
+    return {
+        recording: CAPTURE.running,
+        spoolFolder: CAPTURE.spoolFolder,
+        gamesFolder: arenaPipelineService.getStatus().gamesFolder
+    };
+});
 const {
     ApiError,
     getArenaLocations: getArenaLocationsApi

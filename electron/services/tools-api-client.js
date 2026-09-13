@@ -327,13 +327,16 @@ function getArenaLocations() {
 
 /**
  * POST /api/tools/arena/heartbeat
- * Battement de présence du mode salle (toutes les 5 min) : la page admin du
- * site affiche l'arène "en ligne" tant que le dernier battement a moins de
- * 15 min. Authentifié par la clé de salle seule (header X-Arena-Token, pas de
- * cookie : doit fonctionner même session user expirée). Pas de retry — le
- * battement suivant rattrape un échec ponctuel.
+ * Battement de présence du mode salle (toutes les 5 min, ou à chaque
+ * changement d'état local) : la page admin du site affiche l'arène "en ligne"
+ * tant que le dernier battement a moins de 15 min, et l'état remonté (version,
+ * captation, spool/, games/) sert au diagnostic à distance. Authentifié par la
+ * clé de salle seule (header X-Arena-Token, pas de cookie : doit fonctionner
+ * même session user expirée). Pas de retry — le battement suivant rattrape un
+ * échec ponctuel.
  *
- * @param {{roomId:number, arenaId:number}} payload
+ * @param {{roomId:number, arenaId:number, version:string, recording:boolean,
+ *   pendingGames:string[], spool:string[]}} payload
  * @param {string} arenaToken  clé de salle stockée par arena-mode-service.
  */
 function sendArenaHeartbeat(payload, arenaToken) {

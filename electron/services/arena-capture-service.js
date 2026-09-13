@@ -12,6 +12,7 @@ const { screen } = require('electron');
 const { FFMPEG_PATH } = require('../config/constants');
 const StorageManager = require('../core/storage-manager');
 const arenaAudioService = require('./arena-audio-service');
+const arenaModeService = require('./arena-mode-service');
 
 //#endregion
 
@@ -611,6 +612,8 @@ function startCapture() {
     const PROC = spawn(FFMPEG_PATH, ARGS, { stdio: ['pipe', 'ignore', 'pipe'] });
     ffmpegProcess = PROC;
     startedAt = Date.now();
+    // La captation vient de passer active : battement anticipé vers le backend.
+    arenaModeService.notifyChange();
 
     let resolutionChecked = false;
     // La première image ne commande PLUS l'envoi du son : ffmpeg n'ouvre son
@@ -672,6 +675,9 @@ function startCapture() {
         if (ffmpegProcess !== PROC) return;
         ffmpegProcess = null;
         startedAt = null;
+        // Idem à l'arrêt. Un redémarrage automatique (erreur ffmpeg) fait
+        // clignoter l'état : l'amortissement du battement l'absorbe.
+        arenaModeService.notifyChange();
         if (stopRequested) {
             console.log('[arena-capture] stopped');
             return;
