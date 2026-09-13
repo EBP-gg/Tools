@@ -478,6 +478,27 @@ ZB_PLAY_CONFIRM_S = (5.0, 10.0)
 # Écart entre la fin du gameplay et la fin de game : c'est la durée de l'outro,
 # que la borne inclut. Mesuré +15 à +17 s sur 14 des 15 games du corpus.
 ZB_END_NO_OUTRO_MARGIN_S = 15.0
+# Le balayage qui borne le gameplay s'arrête à la PREMIÈRE frame non-gameplay :
+# une seule suffit donc à inventer une fin. Or il y en a plein le jeu — une
+# grenade ou un tir qui passe derrière la pastille semi-transparente l'éteint
+# pendant 33 à 500 ms (relevé 6 et 9 fois par minute sur les deux incidents du
+# 10 et du 12/09/2026), et une mort efface le cartouche jusqu'à 14 s. On vérifie
+# donc que le jeu n'a pas REPRIS après la borne.
+#
+# Fenêtre de contrôle : ouverte APRÈS la mort la plus longue mesurée (14 s), pour
+# ne pas prendre un joueur mort pour une fin de partie ; refermée avant que la
+# partie SUIVANTE ne commence (relevé jusqu'à 50 s après la fin sur le corpus).
+ZB_PLAY_END_CONFIRM_SPAN_S = (18.0, 33.0)
+ZB_PLAY_END_CONFIRM_PROBES = 6
+# Écart-type sous lequel la région du HUD est d'une seule teinte : la vidéo n'a
+# alors RIEN à dire, ni « en jeu » ni « fini », et la sonde ne doit pas voter.
+# Deux situations la produisent, et les confondre avec une fin de partie coûtait
+# une game : l'entre-deux-games, où le jeu couvre l'écran d'un aplat pendant 4 à
+# 16 s (mesuré sur les 15 games du corpus, sans exception), et les trous de
+# captation — 19 s d'image figée en plein jeu le 10/09/2026 à Rouen.
+# Mesuré : 0,000 dans ces deux cas, 1,9 à 12,0 dans un lobby (où il n'y a
+# vraiment plus de HUD), 63 à 92 en jeu et en pré-game.
+ZB_HUD_FLAT_STD = 1.0
 
 # ── Décompte de départ ─────────────────────────────────────────────────────
 # Les deux derniers chiffres du décompte (« 1 » puis « 0 ») s'affichent au
@@ -4544,6 +4565,48 @@ def _zombies_game_in_progress(cap: cv2.VideoCapture, duration: float) -> bool:
     return False
 
 
+def _zombies_still_playing_after(cap: cv2.VideoCapture, timestamp: float):
+    """
+    La partie zombie continue-t-elle APRÈS *timestamp* ? Sert à valider une fin de
+    game bornée sur la fin du gameplay : si le jeu reprend, ce n'était pas une fin.
+
+    Retourne True (elle continue), False (elle est bien finie), ou None quand la
+    vidéo n'a rien à dire — l'appelant doit alors se rabattre sur autre chose.
+
+    Trois précautions, chacune payée par une game perdue avant d'être comprise :
+
+    - on sonde les DEUX marqueurs, pas la pastille seule : celle-ci est aussi
+      affichée pendant le pré-game de la partie suivante, qui démarre dès 7 s
+      après la fin sur le corpus. Le cartouche, lui, est absent en pré-game ;
+    - à la MAJORITÉ, parce que les deux erreurs possibles sont symétriques et
+      qu'une sonde isolée se trompe dans les deux sens : un flash éteint la
+      pastille sur 1,5 % des frames (on conclurait à une fin en plein jeu, ce qui
+      a coûté deux games de salle les 10 et 12/09/2026), et l'outro est suivie de
+      frames de gameplay isolées (on conclurait à une reprise après une vraie
+      fin) ;
+    - une frame sans information ne VOTE PAS (cf. `ZB_HUD_FLAT_STD`). Sans ça, un
+      trou de captation, ou l'aplat qui suit l'outro, se lisait « plus personne ne
+      joue » — donc « la partie est finie », au beau milieu d'une partie.
+    """
+    START, END = ZB_PLAY_END_CONFIRM_SPAN_S
+    STEP = (END - START) / (ZB_PLAY_END_CONFIRM_PROBES - 1)
+    (X1, Y1), (X2, Y2) = ZB_HUD_BOX
+    VOTES = PLAYING = 0
+    for I in range(ZB_PLAY_END_CONFIRM_PROBES):
+        FRAME = _get_frame(cap, timestamp + START + I * STEP)
+        if FRAME is None:
+            continue
+        REGION = cv2.cvtColor(FRAME[Y1:Y2, X1:X2], cv2.COLOR_RGB2GRAY)
+        if REGION.std() < ZB_HUD_FLAT_STD:
+            continue
+        VOTES += 1
+        if _detect_zombies_playing(FRAME):
+            PLAYING += 1
+    if VOTES * 2 < ZB_PLAY_END_CONFIRM_PROBES:
+        return None
+    return PLAYING * 2 > VOTES
+
+
 def _scan_while(cap: cv2.VideoCapture, timestamp: float, predicate,
                 step: float = 0.5, max_span: float = 15.0) -> float:
     """
@@ -6275,6 +6338,14 @@ def _analyze(
         return
     DURATION = _get_video_duration(CAP)
 
+    # Une game Zombies encore en cours à la fin de la vidéo n'a pas d'outro et
+    # n'apparaîtra donc dans AUCUNE des games détectées ci-dessous. Le mode salle
+    # a pourtant besoin de le savoir avant de purger ses segments : le début de
+    # cette game peut être 35 min en arrière, cinq fois l'horizon d'une game
+    # After-H. Calculé AVANT le balayage, parce que le repli « fin du gameplay »
+    # s'en sert pour refuser de dater la fin d'une partie qui n'est pas finie.
+    ZOMBIES_IN_PROGRESS = _zombies_game_in_progress(CAP, DURATION)
+
     GAMES: list = []   # completed games (index 0 = most recent, same as TS unshift)
     CURRENT: dict = None   # game with end set, start still pending
     TIMESTAMP: float = DURATION
@@ -6509,13 +6580,55 @@ def _analyze(
                 PLAY_END = _scan_while(
                     CAP, TIMESTAMP, _detect_zombies_playing,
                 )
-                # Le gameplay court jusqu'au bout du fichier : la partie n'est pas
-                # finie, c'est la captation qui s'arrête. Il n'y a pas de fin à
-                # dater — et surtout, l'émettre consommerait une game que le mode
-                # salle doit au contraire attendre (c'est le rôle de
-                # `zombiesInProgress`). Relevé sur une captation qui coupe 26 s
-                # après le début d'une partie.
-                if PLAY_END + ZB_END_NO_OUTRO_MARGIN_S <= DURATION:
+                # Trois façons de n'avoir PAS trouvé une fin de game.
+                #
+                # 1. Le gameplay court jusqu'au bout du fichier : ce n'est pas la
+                #    partie qui s'arrête, c'est la captation. Relevé sur une
+                #    captation qui coupe 26 s après le début d'une partie.
+                # 2. Le jeu REPREND après la borne : ce n'était donc pas une fin,
+                #    mais une éclipse de la pastille ou une mort du joueur. C'est
+                #    le test de fond, et il demande de la vidéo après la borne.
+                # 3. Il n'y en a pas assez pour sonder l'après — cas du mode
+                #    salle, dont la fenêtre se termine en plein jeu tous les
+                #    5 min. On se rabat alors sur le seul signal disponible, la
+                #    pastille sur les 60 dernières secondes (`zombiesInProgress`,
+                #    20 sondages, là où le balayage ci-dessus se laisse arrêter
+                #    par UNE frame). Sans lui, une grenade passant derrière le HUD
+                #    à 15 s d'une frontière de segment terminait la partie en
+                #    plein jeu : deux games de salle perdues les 10 et 12/09/2026,
+                #    tronquées à 6 et 14 min pour 26 et 27 min réelles.
+                #
+                # Ce dernier test est bien conditionné au manque de vidéo, et non
+                # posé d'emblée : `zombiesInProgress` répond « une game zombie
+                # tourne à la FIN du fichier », ce qui ne dit rien de la game
+                # candidate. Sur `2026-08-29 17-23-20`, une nouvelle partie
+                # démarre dans les dernières secondes de l'enregistrement alors
+                # que la game à dater s'est terminée 25 min plus tôt, une game
+                # After-H entière entre les deux — le poser d'emblée la perdait.
+                #
+                # None = la vidéo s'arrête trop tôt, ou n'a rien à dire.
+                RESUMES = (
+                    _zombies_still_playing_after(CAP, PLAY_END)
+                    if PLAY_END + ZB_PLAY_END_CONFIRM_SPAN_S[-1] <= DURATION
+                    else None
+                )
+                if PLAY_END + ZB_END_NO_OUTRO_MARGIN_S > DURATION:
+                    if DEBUG:
+                        _emit({'log': f'Zombies gameplay runs to {PLAY_END:.0f}s, '
+                                      f'past the end of a {DURATION:.0f}s capture — '
+                                      f'game still in progress, not emitted'})
+                elif RESUMES:
+                    if DEBUG:
+                        _emit({'log': f'Zombies gameplay resumes after '
+                                      f'{PLAY_END:.0f}s — HUD eclipse or player '
+                                      f'death, not a game end'})
+                elif RESUMES is None and ZOMBIES_IN_PROGRESS:
+                    if DEBUG:
+                        _emit({'log': f'Zombies gameplay ends at {PLAY_END:.0f}s '
+                                      f'but nothing after it settles the matter, '
+                                      f'and a game is still in progress at the end '
+                                      f'of the video — not emitted'})
+                else:
                     if DEBUG:
                         _emit({'log': 'Zombies gameplay end found (no outro)'})
                     FOUND = True
@@ -6524,10 +6637,6 @@ def _analyze(
                     GAME['end'] = PLAY_END + ZB_END_NO_OUTRO_MARGIN_S
                     GAMES.insert(0, GAME)
                     CURRENT = GAME
-                elif DEBUG:
-                    _emit({'log': f'Zombies gameplay runs to {PLAY_END:.0f}s, '
-                                  f'past the end of a {DURATION:.0f}s capture — '
-                                  f'game still in progress, not emitted'})
 
         # ── Écran VICTOIRE = fin de game, en secours de la score frame ──────
         # L'écran VICTOIRE précède la score frame de 10 à 15 s : en temps normal
@@ -6884,12 +6993,6 @@ def _analyze(
             CURRENT['start'] = 0.0
         CURRENT['startFallback'] = True
         _emit({'type': 'game', 'game': CURRENT})
-
-    # Une game Zombies encore en cours à la fin de la vidéo n'a pas d'outro et
-    # n'apparaît donc dans AUCUNE des games ci-dessus. Le mode salle a pourtant
-    # besoin de le savoir avant de purger ses segments : le début de cette game
-    # peut être 35 min en arrière, cinq fois l'horizon d'une game After-H.
-    ZOMBIES_IN_PROGRESS = _zombies_game_in_progress(CAP, DURATION)
 
     CAP.release()
 
