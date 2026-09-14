@@ -101,6 +101,19 @@ const OUTPUT_FPS = 30;
 // Adaptateurs graphiques sondés à la recherche de sorties capturables.
 const MAX_ADAPTERS = 4;
 const RESTART_BASE_DELAY_MS = 5 * 1000;
+// Aperçu : une seule image JPEG réécrite en boucle, pour que l'admin voie à
+// distance ce qui est réellement filmé. Basse cadence et basse définition — ce
+// n'est pas un flux, c'est une preuve de source.
+const PREVIEW_FPS = '1/2';
+const PREVIEW_WIDTH = 480;
+// FUSIBLE. La sortie d'aperçu ajoute une branche au filtergraph, et sur le
+// montage NVENC zéro-copie cette branche impose un `hwdownload` — celui-là même
+// qui a déjà fait échouer NVENC quand il était sur le chemin de l'encodeur. Si
+// ffmpeg meurt dans les premières secondes avec l'aperçu actif, on relance SANS
+// et on ne réessaie plus de la session : une salle perd son aperçu, jamais son
+// enregistrement.
+const PREVIEW_FUSE_MS = 10 * 1000;
+let previewDisabled = false;
 const RESTART_MAX_DELAY_MS = 60 * 1000;
 
 let ffmpegProcess = null;
@@ -169,6 +182,14 @@ function getSpoolFolder() {
  */
 function setSpoolFolder(spoolPath) {
     StorageManager.setPermanentSettingsValue(SETTINGS_KEY_SPOOL, spoolPath);
+}
+
+/**
+ * Fichier d'aperçu, à la racine de EBP-Tools-Arena — surtout pas dans spool/ ni
+ * games/, que le pipeline et l'uploader scrutent.
+ */
+function getPreviewPath() {
+    return path.join(path.dirname(getSpoolFolder()), 'preview.jpg');
 }
 
 function getDevice() {
@@ -393,7 +414,22 @@ async function listVideoDevices() {
     return [...SCREENS, ...cameras];
 }
 
-function buildFfmpegArgs(device) {
+/**
+ * Filtres de la branche d'aperçu quand les images arrivent du GPU : on les
+ * redescend en RAM, on tombe à une image toutes les deux secondes et on réduit.
+ * L'ordre compte — descendre AVANT de réduire coûte le bus, réduire avant est
+ * impossible sans filtre GPU supplémentaire.
+ */
+function previewFilters() {
+    return `hwdownload,format=bgra,fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1`;
+}
+
+/**
+ * @param {object} device
+ * @param {boolean} withPreview  Ajoute la sortie d'aperçu. Coupé par le fusible
+ *   après un échec de démarrage (cf. PREVIEW_FUSE_MS).
+ */
+function buildFfmpegArgs(device, withPreview) {
     const IS_MAC = process.platform === 'darwin';
     const SPOOL = getSpoolFolder();
     const IS_SCREEN = device.kind === 'screen';
@@ -438,9 +474,15 @@ function buildFfmpegArgs(device) {
             // logiciel ramènerait le problème ci-dessus.
             FILTERS.push('hwmap=derive_device=cuda', 'scale_cuda=1920:1080');
         }
+        // La branche d'aperçu se détache APRÈS le traitement GPU et redescend
+        // seule en RAM : le chemin de l'encodeur reste intégralement sur GPU,
+        // c'est ce qui doit préserver NVENC. Le fusible est là pour le cas où.
+        const GRAPH = withPreview
+            ? `${FILTERS.join(',')},split=2[v][p];[p]${previewFilters()}[pv]`
+            : `${FILTERS.join(',')}[v]`;
         inputArgs = [
             '-init_hw_device', hwDeviceArg(device.adapter),
-            '-filter_complex', `${FILTERS.join(',')}[v]`,
+            '-filter_complex', GRAPH,
             '-map', '[v]'
         ];
         pixFmtArgs = [];
@@ -468,10 +510,15 @@ function buildFfmpegArgs(device) {
         // conversion vers l'espace attendu par l'encodeur est explicite pour
         // ne pas dépendre de l'auto-insertion de ffmpeg.
         FILTERS.push('format=yuv420p');
+        // Images déjà en RAM sur ce chemin : la branche d'aperçu ne coûte
+        // qu'une réduction.
+        const GRAPH = withPreview
+            ? `${FILTERS.join(',')},split=2[v][p];[p]fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1[pv]`
+            : `${FILTERS.join(',')}[v]`;
         inputArgs = [
             '-init_hw_device', 'd3d11va=dda',
             '-filter_hw_device', 'dda',
-            '-filter_complex', `${FILTERS.join(',')}[v]`,
+            '-filter_complex', GRAPH,
             '-map', '[v]'
         ];
     } else if (IS_SCREEN) {
@@ -502,6 +549,10 @@ function buildFfmpegArgs(device) {
         ];
     }
     const ENCODER_ARGS = ENCODER.args;
+    // Les chemins ddagrab produisent leur flux par `-filter_complex` : l'aperçu
+    // y est un label du graphe. Les autres ont un `-i`, l'aperçu s'y filtre
+    // directement sur sa propre sortie.
+    const USES_FILTER_GRAPH = IS_SCREEN && !IS_MAC;
     // Sortie en CFR : les caméras (surtout virtuelles) livrent des timestamps
     // irréguliers qui, sans ça, produisent un temps média ≠ temps réel (fps
     // annoncés délirants, frames dupliquées) — ce qui fausse la durée des
@@ -527,7 +578,22 @@ function buildFfmpegArgs(device) {
         '-segment_time', String(SEGMENT_SECONDS),
         '-reset_timestamps', '1',
         '-strftime', '1',
-        path.join(SPOOL, 'rec_%Y%m%d-%H%M%S.mkv')
+        path.join(SPOOL, 'rec_%Y%m%d-%H%M%S.mkv'),
+        // Seconde sortie : une image unique réécrite en boucle (`-update 1`).
+        // Sur les chemins filtergraph elle vient du label [pv] produit par le
+        // split ; sur les chemins à `-i` (caméras, écran macOS) les images sont
+        // déjà en RAM et le filtre se pose directement sur cette sortie.
+        ...(withPreview
+            ? [
+                  ...(USES_FILTER_GRAPH
+                      ? ['-map', '[pv]']
+                      : ['-map', '0:v', '-vf', `fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1`]),
+                  '-f', 'image2',
+                  '-update', '1',
+                  '-y',
+                  getPreviewPath()
+              ]
+            : [])
     ];
 }
 
@@ -607,11 +673,13 @@ function startCapture() {
         arenaAudioService.start();
     }
 
-    const ARGS = buildFfmpegArgs(resolvedDevice);
+    const WITH_PREVIEW = !previewDisabled;
+    const ARGS = buildFfmpegArgs(resolvedDevice, WITH_PREVIEW);
     console.log(`[arena-capture] starting: ${FFMPEG_PATH} ${ARGS.join(' ')}`);
     const PROC = spawn(FFMPEG_PATH, ARGS, { stdio: ['pipe', 'ignore', 'pipe'] });
     ffmpegProcess = PROC;
     startedAt = Date.now();
+    const STARTED_AT = startedAt;
     // La captation vient de passer active : battement anticipé vers le backend.
     arenaModeService.notifyChange();
 
@@ -704,6 +772,22 @@ function startCapture() {
             detectedMode = SUPPORTED;
             console.log(
                 `[arena-capture] device imposes ${SUPPORTED.width}x${SUPPORTED.height}@${SUPPORTED.fps} — restarting with it`
+            );
+            startCapture();
+            return;
+        }
+        // FUSIBLE de l'aperçu, en DERNIER recours : on n'arrive ici qu'une fois
+        // les causes connues écartées (arrêt volontaire, résolution refusée,
+        // mode imposé par le périphérique). Une mort prématurée avec l'aperçu
+        // actif désigne alors le filtergraph — un graphe refusé échoue au
+        // démarrage, pas après une heure. On coupe l'aperçu pour la session et
+        // on relance sans attendre le backoff : la salle ne doit pas perdre
+        // d'enregistrement le temps qu'on comprenne.
+        if (WITH_PREVIEW && Date.now() - STARTED_AT < PREVIEW_FUSE_MS) {
+            previewDisabled = true;
+            lastError = null;
+            console.warn(
+                `[arena-capture] ffmpeg a échoué avec la sortie d'aperçu — relance sans aperçu —\n${stderrTail.join('\n')}`
             );
             startCapture();
             return;
@@ -803,7 +887,9 @@ function getStatus() {
         startedAt,
         lastError,
         spoolFolder: getSpoolFolder(),
-        segmentSeconds: SEGMENT_SECONDS
+        segmentSeconds: SEGMENT_SECONDS,
+        // Chemin de l'image d'aperçu, `null` si le fusible l'a coupée.
+        previewPath: previewDisabled ? null : getPreviewPath()
     };
 }
 

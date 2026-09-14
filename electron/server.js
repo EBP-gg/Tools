@@ -147,7 +147,8 @@ arenaModeService.setStatusProvider(() => {
     return {
         recording: CAPTURE.running,
         spoolFolder: CAPTURE.spoolFolder,
-        gamesFolder: arenaPipelineService.getStatus().gamesFolder
+        gamesFolder: arenaPipelineService.getStatus().gamesFolder,
+        previewPath: CAPTURE.previewPath
     };
 });
 const {

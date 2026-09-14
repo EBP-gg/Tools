@@ -15,6 +15,7 @@ const {
     reportArenaFileResult,
     uploadFileToPresignedUrl
 } = require('./tools-api-client');
+const { connectArena, disconnectArena } = require('./socket-service');
 const { version: TOOLS_VERSION } = require('../../package.json');
 
 //#endregion
@@ -22,9 +23,15 @@ const { version: TOOLS_VERSION } = require('../../package.json');
 // Mode salle : cette machine est le PC de streaming d'une arène EVA. L'état
 // vit dans les settings permanents. Contrat backend : wiki/arena_mode_api.md.
 const SETTINGS_KEY = 'arenaMode';
-// Battement de présence vers le backend (la page admin du site affiche
-// l'arène "en ligne" si le dernier battement a moins de 15 min).
-const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+// Filet de sécurité, plus un battement de présence : c'est la connexion au
+// namespace /arena qui dit à l'admin qu'une salle est en ligne, et tout
+// changement d'état déclenche déjà un battement immédiat. Le périodique ne sert
+// donc plus qu'à deux choses, dont aucune n'exige 5 minutes : prouver que
+// l'APPLICATION vit — un socket ouvert ne prouve que la connexion, l'analyseur
+// et ffmpeg tournant dans des processus enfants peuvent être morts pendant que
+// la boucle d'événements répond encore — et réconcilier l'état affiché si un
+// battement s'est perdu.
+const HEARTBEAT_INTERVAL_MS = 20 * 60 * 1000;
 // Cooldown entre deux tentatives de mise à jour ordonnées par le serveur :
 // le flag reste posé côté back tant que la version n'a pas changé, sans ce
 // garde on relancerait un installeur défaillant à chaque battement.
@@ -46,10 +53,11 @@ let lastUpdateAttemptAt = 0;
 // Fournisseur de l'état local remonté dans le battement (posé par server.js) :
 // évite un require croisé, arena-pipeline-service requérant déjà ce module.
 let statusProvider = null;
-// Un ordre de remontée à la fois : le serveur n'en envoie qu'un par battement,
-// mais les battements sont désormais déclenchés par les changements de fichier —
-// sans ce verrou, un ordre lent serait relancé en parallèle de lui-même.
-let fetchInFlight = false;
+// Fichier en cours de remontée, `null` si aucun. Sert à deux choses : un seul
+// ordre à la fois (sans ce verrou, un ordre lent serait relancé en parallèle de
+// lui-même, les battements étant déclenchés par les changements de fichier), et
+// refuser la suppression d'un fichier qu'on est en train d'envoyer.
+let fetchingFile = null;
 // Callback d'exécution d'une mise à jour ordonnée par l'admin (posé par
 // server.js : stop captation propre puis UpdateService.forceUpdate()).
 let updateHandler = null;
@@ -137,6 +145,19 @@ function sendHeartbeat() {
 }
 
 /**
+ * Chemin du dossier désigné par un ordre ou une demande de listing. Seuls ces
+ * deux noms existent : le serveur ne peut pas désigner un dossier arbitraire.
+ * @returns {string|null}
+ */
+function folderPath(folder) {
+    if (!statusProvider) return null;
+    const STATUS = statusProvider();
+    if (folder === 'spool') return STATUS.spoolFolder;
+    if (folder === 'games') return STATUS.gamesFolder;
+    return null;
+}
+
+/**
  * Honore un ordre de remontée : un admin réclame un fichier de spool/ ou games/,
  * que le serveur ne peut pas venir chercher (le PC de salle n'est joignable par
  * personne). Le fichier part vers une zone S3 temporaire d'où l'admin le
@@ -152,16 +173,11 @@ function sendHeartbeat() {
  * le représente.
  */
 function handleFetchOrder(order, state) {
-    if (fetchInFlight || !statusProvider) return;
-    const DIR =
-        order.folder === 'spool'
-            ? statusProvider().spoolFolder
-            : order.folder === 'games'
-              ? statusProvider().gamesFolder
-              : null;
+    if (fetchingFile) return;
+    const DIR = folderPath(order.folder);
     if (!DIR) return;
 
-    fetchInFlight = true;
+    fetchingFile = order.name;
     const PAYLOAD = {
         roomId: state.roomId,
         arenaId: state.arenaId,
@@ -196,8 +212,60 @@ function handleFetchOrder(order, state) {
             console.warn('[arena-mode] fetch order failed:', e.message)
         )
         .finally(() => {
-            fetchInFlight = false;
+            fetchingFile = null;
         });
+}
+
+/**
+ * Dernière image captée, telle que ffmpeg la réécrit en continu pendant la
+ * captation. Rien n'est encodé ici : on relit un fichier, le périphérique
+ * restant tenu en exclusivité par la captation.
+ *
+ * @returns {{image: string|null, reason?: string}} JPEG en base64, ou la raison
+ *   de l'absence : captation arrêtée, aperçu coupé par son fusible, ou fichier
+ *   pas encore écrit (les premières secondes d'une captation).
+ */
+function readPreviewFrame() {
+    if (!statusProvider) return { image: null, reason: 'unavailable' };
+    const STATUS = statusProvider();
+    if (!STATUS.recording) return { image: null, reason: 'not_recording' };
+    if (!STATUS.previewPath) return { image: null, reason: 'preview_disabled' };
+    try {
+        return { image: fs.readFileSync(STATUS.previewPath).toString('base64') };
+    } catch (_) {
+        return { image: null, reason: 'no_frame_yet' };
+    }
+}
+
+/**
+ * Supprime un fichier de spool/ ou games/ à la demande d'un admin. Destructif et
+ * sans retour possible : les deux gardes comptent.
+ *
+ * Le nom est cherché dans le `readdir` du dossier, jamais joint au chemin — le
+ * serveur ne désigne pas un fichier du disque, il ne peut que nommer ce que la
+ * salle a elle-même annoncé. Et un fichier en cours de remontée est refusé :
+ * l'effacer sous les pieds du transfert le casserait.
+ *
+ * La disparition du fichier réveille le watcher, donc un battement : les
+ * compteurs de la page admin se remettent à jour tout seuls.
+ *
+ * @returns {{deleted: boolean, reason?: string}}
+ */
+function deleteFile(folder, name) {
+    const DIR = folderPath(folder);
+    if (!DIR) return { deleted: false, reason: 'unknown_folder' };
+    if (name === fetchingFile) return { deleted: false, reason: 'uploading' };
+    if (!listFiles(DIR).includes(name)) {
+        return { deleted: false, reason: 'not_found' };
+    }
+    try {
+        fs.unlinkSync(path.join(DIR, name));
+        console.log(`[arena-mode] deleted ${folder}/${name}`);
+        return { deleted: true };
+    } catch (e) {
+        console.error('[arena-mode] delete failed:', name, e.message);
+        return { deleted: false, reason: 'error' };
+    }
 }
 
 /**
@@ -270,6 +338,15 @@ function startHeartbeat() {
     const STATE = StorageManager.getPermanentSettingsValue(SETTINGS_KEY);
     if (!STATE || !STATE.token) return;
     startWatchers();
+    // Canal temps réel : un ordre admin arrive alors en quelques secondes au
+    // lieu d'attendre le battement. Le battement le porte toujours — c'est lui
+    // qui rattrape tout ordre émis pendant une coupure.
+    connectArena(STATE, {
+        onFetch: (order) => handleFetchOrder(order, STATE),
+        onList: (folder) => listFiles(folderPath(folder)),
+        onDelete: deleteFile,
+        onFrame: readPreviewFrame
+    });
     beat();
 }
 
@@ -284,6 +361,7 @@ function stopHeartbeat() {
     }
     for (const WATCHER of watchers) WATCHER.close();
     watchers = [];
+    disconnectArena();
 }
 
 /**
