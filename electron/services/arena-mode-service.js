@@ -131,13 +131,7 @@ function sendHeartbeat() {
         .then((res) => {
             if (!res) return;
             if (res.fetch) handleFetchOrder(res.fetch, STATE);
-            if (!res.update || !updateHandler) return;
-            if (Date.now() - lastUpdateAttemptAt < UPDATE_ATTEMPT_COOLDOWN_MS) {
-                return;
-            }
-            lastUpdateAttemptAt = Date.now();
-            console.log('[arena-mode] update ordered by server — updating now');
-            updateHandler();
+            if (res.update) runUpdate();
         })
         .catch((e) =>
             console.warn('[arena-mode] heartbeat failed:', e.message)
@@ -214,6 +208,20 @@ function handleFetchOrder(order, state) {
         .finally(() => {
             fetchingFile = null;
         });
+}
+
+/**
+ * Exécute une mise à jour ordonnée par un admin, qu'elle arrive par le socket
+ * (immédiat) ou par la réponse au heartbeat (repli). Le même cooldown couvre les
+ * deux : le flag reste posé côté serveur tant que la version n'a pas changé,
+ * sans ce garde on relancerait un installeur défaillant à chaque ordre.
+ */
+function runUpdate() {
+    if (!updateHandler) return;
+    if (Date.now() - lastUpdateAttemptAt < UPDATE_ATTEMPT_COOLDOWN_MS) return;
+    lastUpdateAttemptAt = Date.now();
+    console.log('[arena-mode] update ordered by server — updating now');
+    updateHandler();
 }
 
 /**
@@ -345,7 +353,8 @@ function startHeartbeat() {
         onFetch: (order) => handleFetchOrder(order, STATE),
         onList: (folder) => listFiles(folderPath(folder)),
         onDelete: deleteFile,
-        onFrame: readPreviewFrame
+        onFrame: readPreviewFrame,
+        onUpdate: runUpdate
     });
     beat();
 }

@@ -49,7 +49,8 @@ let arenaSocket = null;
  * @param {{onFetch: (order: {id:string, folder:string, name:string}) => void,
  *          onList: (folder: string) => string[],
  *          onDelete: (folder: string, name: string) => {deleted:boolean, reason?:string},
- *          onFrame: () => {image: string|null, reason?: string}}} handlers
+ *          onFrame: () => {image: string|null, reason?: string},
+ *          onUpdate: () => void}} handlers
  */
 function connectArena(state, handlers) {
     disconnectArena();
@@ -87,6 +88,9 @@ function connectArena(state, handlers) {
     // Suppression demandée par un admin. Synchrone et acquittée : l'admin reçoit
     // un verdict franc — supprimé, introuvable, ou refusé — plutôt qu'un accusé
     // de réception qui ne garantit rien.
+    // Mise à jour ordonnée par un admin. Pas d'acquittement : Tools arrête la
+    // captation et relance l'installeur, il ne sera plus là pour répondre.
+    arenaSocket.on('arena_update', () => handlers.onUpdate());
     // Image de ce qui est filmé en ce moment : lue dans le fichier d'aperçu que
     // ffmpeg réécrit en continu, donc sans toucher au périphérique (que la
     // captation tient en exclusivité).
