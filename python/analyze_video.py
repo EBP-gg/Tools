@@ -5,6 +5,8 @@
 import sys
 import os
 import json
+import tempfile
+import atexit
 import io
 import re
 import base64
@@ -26,6 +28,15 @@ import blob_detector as _blob_detector
 import capture_state as _capture_state
 import digit_classifier as _digit_classifier
 import map_metadata as _map_metadata
+
+
+def _remove_file_quietly(path):
+    """Supprime un fichier temporaire ; l'absence du fichier n'est pas une erreur."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # MODES
@@ -7364,10 +7375,12 @@ def _analyze_chunks(video_path: str, settings: dict) -> None:
         # Fichier user_words pour Tesseract : biaise (faiblement) le LM vers
         # les pseudos roster connus. Effet modeste (~+1 kill / 80 sur LE TEST)
         # car PSM 7/8 + whitelist court-circuite le LM, mais c'est gratuit.
-        # On stocke en /tmp avec un nom déterministe par chunk.
+        # `mkstemp` plutôt qu'un nom dérivé du gameID : celui-ci vient du client
+        # (deep link `ebp://analyzeChunks`) et pourrait porter des `..`, et un
+        # nom prévisible dans /tmp partagé se pré-crée en lien symbolique. Ici :
+        # nom aléatoire, O_EXCL, 0600, et suppression en fin de processus.
         USER_WORDS_PATH = None
         if ORANGE_ROSTER or BLUE_ROSTER:
-            USER_WORDS_PATH = os.path.join('/tmp', f'eva_user_words_{GAME_ID}.txt')
             ALL_NAMES = set()
             for p in ORANGE_ROSTER + BLUE_ROSTER:
                 n = p.get('name')
@@ -7376,8 +7389,10 @@ def _analyze_chunks(video_path: str, settings: dict) -> None:
                     ALL_NAMES.add(n.upper())
                     ALL_NAMES.add(n.lower())
             try:
-                with open(USER_WORDS_PATH, 'w') as f:
+                FD, USER_WORDS_PATH = tempfile.mkstemp(prefix='eva_user_words_', suffix='.txt')
+                with os.fdopen(FD, 'w') as f:
                     f.write('\n'.join(ALL_NAMES) + '\n')
+                atexit.register(_remove_file_quietly, USER_WORDS_PATH)
             except Exception:
                 USER_WORDS_PATH = None
 
