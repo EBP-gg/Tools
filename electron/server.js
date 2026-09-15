@@ -71,14 +71,17 @@ require('./core/activity-tracker').install();
 
 const path = require('node:path');
 const os = require('os');
-const { exec, execFile, spawn } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const ExcelJS = require('exceljs');
 require('./discord-rpc');
 const util = require('util');
-const execAsync = util.promisify(exec);
+// `execFile` plutôt que `exec` : l'exécutable et ses arguments sont passés en
+// argv, donc aucun caractère d'un chemin ou d'une URL ne peut être réinterprété
+// par /bin/sh ou cmd.exe (injection de commande).
+const execFileAsync = util.promisify(execFile);
 const {
     IS_DEV_MODE,
     ROOT_PATH,
@@ -778,8 +781,14 @@ if (!APP_GOT_THE_LOCK) {
 
                     // Ne télécharger que si la source propose du 1080p (ou mieux) :
                     // sinon l'analyse n'est pas fiable. Sonde les formats via yt-dlp.
-                    const { stdout } = await execAsync(
-                        `"${YT_DLP_PATH}" --js-runtimes "deno:${DENO_PATH}" -J "${VIDEO_URL}"`,
+                    const { stdout } = await execFileAsync(
+                        YT_DLP_PATH,
+                        [
+                            '--js-runtimes',
+                            `deno:${DENO_PATH}`,
+                            '-J',
+                            VIDEO_URL
+                        ],
                         { timeout: 30000, maxBuffer: 100 * 1024 * 1024 }
                     );
                     const INFO = JSON.parse(stdout);
@@ -1180,16 +1189,22 @@ if (!APP_GOT_THE_LOCK) {
         );
         unlinkSync(OUTPUT_FILE_PATH);
 
-        const COMMAND /* string */ = `"${FFMPEG_PATH}" -ss ${
-            game._start
-        } -i "${videoPath}" -t ${
-            game._end - game._start
-        } -c copy "${OUTPUT_FILE_PATH}"`;
+        const ARGS /* string[] */ = [
+            '-ss',
+            String(game._start),
+            '-i',
+            videoPath,
+            '-t',
+            String(game._end - game._start),
+            '-c',
+            'copy',
+            OUTPUT_FILE_PATH
+        ];
 
-        console.log(`[FFMPEG] Cut Game - Executing: ${COMMAND}`);
+        console.log(`[FFMPEG] Cut Game - Executing: ${FFMPEG_PATH} ${ARGS}`);
 
         return new Promise((resolve, reject) => {
-            exec(COMMAND, (error, stdout, stderr) => {
+            execFile(FFMPEG_PATH, ARGS, (error, stdout, stderr) => {
                 if (error) {
                     console.error(
                         `[FFMPEG] Cut Game - Error: ${error.message}`
@@ -1256,8 +1271,17 @@ if (!APP_GOT_THE_LOCK) {
         };
         createFloatingWindow(500, 150, JSON.stringify(NOTIFICATION_DATA));
 
-        const MAX_TIME_PER_GAME = data.maxTime ?? 10;
-        const MAX_GAMES_AT_SAME_TIME = data.maxGames ?? 3;
+        // Ces deux valeurs partent dans le nom du fichier déposé dans le watch
+        // folder : venues du deeplink, un `/` ou `..` les ferait écrire ailleurs.
+        // Le watcher ne relit de toute façon que des entiers (`__mtpg-(\d+)`).
+        const isValidCount = (v, max) =>
+            Number.isInteger(v) && v >= 1 && v <= max;
+        const MAX_TIME_PER_GAME = isValidCount(data.maxTime, 120)
+            ? data.maxTime
+            : 10;
+        const MAX_GAMES_AT_SAME_TIME = isValidCount(data.maxGames, 100)
+            ? data.maxGames
+            : 3;
         // Scores forcés (panneau "association") : on ne les encode que si LES DEUX
         // sont des entiers 0-100. Sinon on ignore (analyse normale, OCR).
         const isValidScore = (v) => Number.isInteger(v) && v >= 0 && v <= 100;
@@ -1812,12 +1836,21 @@ if (!APP_GOT_THE_LOCK) {
         );
         unlinkSync(OUTPUT_FILE_PATH);
 
-        const COMMAND /* string */ = `"${FFMPEG_PATH}" -i "${videoPath}" -filter:v "crop=${cropPosition.x2 - cropPosition.x1}:${cropPosition.y2 - cropPosition.y1}:${cropPosition.x1}:${cropPosition.y1}" -r 10 -an "${OUTPUT_FILE_PATH}"`;
+        const ARGS /* string[] */ = [
+            '-i',
+            videoPath,
+            '-filter:v',
+            `crop=${cropPosition.x2 - cropPosition.x1}:${cropPosition.y2 - cropPosition.y1}:${cropPosition.x1}:${cropPosition.y1}`,
+            '-r',
+            '10',
+            '-an',
+            OUTPUT_FILE_PATH
+        ];
 
-        console.log(`[FFMPEG] Crop - Executing: ${COMMAND}`);
+        console.log(`[FFMPEG] Crop - Executing: ${FFMPEG_PATH} ${ARGS}`);
 
         return new Promise((resolve, reject) => {
-            exec(COMMAND, (error, stdout, stderr) => {
+            execFile(FFMPEG_PATH, ARGS, (error, stdout, stderr) => {
                 if (error) {
                     console.error(`[FFMPEG] Crop - Error: ${error.message}`);
                     return reject(error);
@@ -1943,11 +1976,23 @@ if (!APP_GOT_THE_LOCK) {
             TEMP_FILES.map((f) => `file '${f}'`).join('\n')
         );
 
-        const CONCAT_COMMAND = `"${FFMPEG_PATH}" -f concat -safe 0 -i "${CONCAT_FILE}" -c copy "${output}"`;
-        console.log(`[FFMPEG] - Concat - Executing: ${CONCAT_COMMAND}`);
+        const CONCAT_ARGS = [
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            CONCAT_FILE,
+            '-c',
+            'copy',
+            output
+        ];
+        console.log(
+            `[FFMPEG] - Concat - Executing: ${FFMPEG_PATH} ${CONCAT_ARGS}`
+        );
 
         try {
-            const result = await execAsync(CONCAT_COMMAND);
+            const result = await execFileAsync(FFMPEG_PATH, CONCAT_ARGS);
             console.log(
                 `[[FFMPEG] - Concat - Completed successfully: ${output}`
             );
@@ -2331,8 +2376,9 @@ if (!APP_GOT_THE_LOCK) {
             try {
                 const YT_DLP_PATH = await ytDlpService.ensureYtDlp();
                 const DENO_PATH = await denoService.ensureDeno();
-                const { stdout } = await execAsync(
-                    `"${YT_DLP_PATH}" --js-runtimes "deno:${DENO_PATH}" -J "${url}"`,
+                const { stdout } = await execFileAsync(
+                    YT_DLP_PATH,
+                    ['--js-runtimes', `deno:${DENO_PATH}`, '-J', url],
                     { timeout: 30000, maxBuffer: 100 * 1024 * 1024 }
                 );
                 const DATA = JSON.parse(stdout);
@@ -2385,8 +2431,16 @@ if (!APP_GOT_THE_LOCK) {
                 );
 
                 let percent = 0;
-                exec(
-                    `"${YT_DLP_PATH}" --js-runtimes "deno:${DENO_PATH}" --ffmpeg-location "${FFMPEG_PATH}" --get-title ${url}`,
+                execFile(
+                    YT_DLP_PATH,
+                    [
+                        '--js-runtimes',
+                        `deno:${DENO_PATH}`,
+                        '--ffmpeg-location',
+                        FFMPEG_PATH,
+                        '--get-title',
+                        url
+                    ],
                     (error, stdout, stderr) => {
                         if (error) {
                             console.error(error.message);
@@ -2933,15 +2987,14 @@ if (!APP_GOT_THE_LOCK) {
         );
 
         // The front-end asks the server to open a video file.
-        ipcMain.handle('open-file', (event, path) => {
-            const COMMAND =
-                process.platform === 'win32'
-                    ? `start "" "${path}"`
-                    : process.platform === 'darwin'
-                      ? `open "${path}"`
-                      : `xdg-open "${path}"`;
-
-            exec(COMMAND);
+        // `shell.openPath` confie le chemin à l'OS sans passer par un shell : un
+        // nom de fichier venu d'un titre de vidéo distante ne peut donc pas y
+        // glisser de commande.
+        ipcMain.handle('open-file', async (event, path) => {
+            const ERROR = await shell.openPath(path);
+            if (ERROR) {
+                console.error(`[open-file] ${ERROR}`);
+            }
         });
 
         ipcMain.handle(
