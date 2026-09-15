@@ -14,6 +14,11 @@
 # rester un acte explicite et relu.
 name: Publish analyzer component
 
+# Ce workflow ne fait que lire le dépôt et pousser sur S3 : le GITHUB_TOKEN que
+# `checkout` laisse sur le runner n'a besoin d'aucun droit d'écriture.
+permissions:
+    contents: read
+
 on:
     workflow_dispatch:
         inputs:
@@ -40,8 +45,11 @@ env:
     S3_PREFIX: tools/components/analyzer
     # MinIO ignore la région, mais l'AWS CLI refuse de démarrer sans.
     AWS_DEFAULT_REGION: us-east-1
-    AWS_ACCESS_KEY_ID: ${{ secrets.COMPONENTS_S3_ACCESS_KEY }}
-    AWS_SECRET_ACCESS_KEY: ${{ secrets.COMPONENTS_S3_SECRET_KEY }}
+    # Clés S3 volontairement absentes d'ici : au niveau du workflow elles
+    # seraient lisibles par `pip install`, `brew install` et le binaire fraîchement
+    # construit — soit autant de code tiers. Elles sont posées sur les seules
+    # étapes « Publish ».
+
 
 jobs:
     macos-arm64:
@@ -102,6 +110,9 @@ jobs:
 
             - name: Publish
               id: publish
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.COMPONENTS_S3_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.COMPONENTS_S3_SECRET_KEY }}
               run: bash .github/scripts/publish-component.sh darwin-arm64 binaries/analyzer/darwin darwin/darwin
 
     macos-intel:
@@ -191,6 +202,9 @@ jobs:
 
             - name: Publish
               id: publish
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.COMPONENTS_S3_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.COMPONENTS_S3_SECRET_KEY }}
               run: bash .github/scripts/publish-component.sh darwin-x64 binaries/analyzer/darwin darwin/darwin
 
     linux:
@@ -215,6 +229,9 @@ jobs:
 
             - name: Publish
               id: publish
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.COMPONENTS_S3_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.COMPONENTS_S3_SECRET_KEY }}
               run: bash .github/scripts/publish-component.sh linux binaries/analyzer/linux linux/linux
 
     windows:
@@ -251,6 +268,9 @@ jobs:
             - name: Publish
               id: publish
               shell: bash
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.COMPONENTS_S3_ACCESS_KEY }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.COMPONENTS_S3_SECRET_KEY }}
               run: bash .github/scripts/publish-component.sh win32 binaries/analyzer/win32.exe
 
     manifest:
