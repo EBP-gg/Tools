@@ -83,11 +83,14 @@ export class App implements OnInit {
     });
 
     // Getting the web server port.
-    window.electronAPI.getExpressPort().then((serverPort: number) => {
-      this.ngZone.run(() => {
-        this.globalService.serverPort = serverPort;
+    window.electronAPI
+      .getExpressPort()
+      .then((server: { port: number; token: string }) => {
+        this.ngZone.run(() => {
+          this.globalService.serverPort = server.port;
+          this.globalService.serverToken = server.token;
+        });
       });
-    });
 
     if (SPLITED[1] != 'notification') {
       // Getting the user's operating system.

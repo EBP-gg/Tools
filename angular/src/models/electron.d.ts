@@ -133,7 +133,7 @@ export interface ElectronAPI {
     platform: VideoPlatform,
     formatId?: string
   ) => Promise<void>;
-  getExpressPort: () => Promise<number>;
+  getExpressPort: () => Promise<{ port: number; token: string }>;
   getOS: () => Promise<NodeJS.Platform>;
   getReplayDownloaderOutputPath: () => Promise<string>;
   getVersion: () => Promise<Versions>;

@@ -106,7 +106,10 @@ const {
 const StorageManager = require('./core/storage-manager');
 const socketEmit = require('./services/socket-service');
 const sessionService = require('./services/session-service');
-const { setupExpressServer } = require('./express/express-server');
+const {
+    setupExpressServer,
+    SERVER_TOKEN
+} = require('./express/express-server');
 const {
     changeVideoResolution,
     removeBorders,
@@ -2639,9 +2642,10 @@ if (!APP_GOT_THE_LOCK) {
             shell.openExternal(url);
         });
 
-        // The front-end asks the server to return the web server port.
+        // The front-end asks the server to return the web server port, and the
+        // jeton qui autorise ses appels à /file (le seul endpoint protégé).
         ipcMain.handle('get-express-port', () => {
-            return getCurrentPort();
+            return { port: getCurrentPort(), token: SERVER_TOKEN };
         });
 
         // The front-end asks the server to return the project version.

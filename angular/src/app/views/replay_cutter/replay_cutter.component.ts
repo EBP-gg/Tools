@@ -378,7 +378,7 @@ export class ReplayCutterComponent {
       );
 
       ReplayCutterService.videoURLToCanvas(
-        `http://localhost:${this.globalService.serverPort}/file?path=${this._videoPath}`,
+        `http://localhost:${this.globalService.serverPort}/file?token=${this.globalService.serverToken}&path=${this._videoPath}`,
         Math.round((game.start + index) * 1000),
         (videoFrame?: HTMLCanvasElement) => {
           if (videoFrame) {
@@ -611,7 +611,7 @@ export class ReplayCutterComponent {
       );
     } else if (this._videoPath) {
       ReplayCutterService.videoURLToCanvas(
-        `http://localhost:${this.globalService.serverPort}/file?path=${this._videoPath}`,
+        `http://localhost:${this.globalService.serverPort}/file?token=${this.globalService.serverToken}&path=${this._videoPath}`,
         (this._games[gameIndex].start + index) * 1000,
         (videoFrame?: HTMLCanvasElement) => {
           if (videoFrame) {
@@ -784,7 +784,7 @@ export class ReplayCutterComponent {
 
   private analyzeVideoFile(videoFilePath: string): void {
     ReplayCutterService.videoURLToCanvas(
-      `http://localhost:${this.globalService.serverPort}/file?path=${encodeURIComponent(videoFilePath)}`,
+      `http://localhost:${this.globalService.serverPort}/file?token=${this.globalService.serverToken}&path=${encodeURIComponent(videoFilePath)}`,
       15 * 1000,
       (videoFrame?: HTMLCanvasElement) => {
         if (videoFrame) {
@@ -1513,7 +1513,7 @@ export class ReplayCutterComponent {
             .then((filesPath: string[]) => {
               if (filesPath.length > 0) {
                 ReplayCutterService.videoURLToCanvas(
-                  `http://localhost:${this.globalService.serverPort}/file?path=${filesPath[0]}`,
+                  `http://localhost:${this.globalService.serverPort}/file?token=${this.globalService.serverToken}&path=${filesPath[0]}`,
                   15 * 1000,
                   (videoFrame?: HTMLCanvasElement) => {
                     if (videoFrame) {
