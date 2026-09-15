@@ -6335,6 +6335,11 @@ def _analyze(
                         (max_time - M) * 60 - S - 20 secondes pour éviter
                         de parcourir toute la durée du jeu seconde par seconde.
     """
+    # Même garde-fou que `_open_video` : le backend FFmpeg résout aussi les URLs
+    # réseau, et ce chemin vient du client (deep link).
+    if not os.path.isfile(video_path):
+        _emit({'type': 'error', 'message': f'Cannot open video: {video_path}'})
+        return
     # Hardware-accelerated decode : VideoToolbox sur macOS, D3D11 sur Windows.
     # Fallback sur CAP_FFMPEG (software) si le backend natif échoue.
     if sys.platform == 'darwin':
@@ -7260,6 +7265,12 @@ def _ocr_score_at(frame: np.ndarray, spec: dict, colors: list, max_score: int = 
 
 def _open_video(video_path: str):
     """Ouvre la vidéo avec accélération hardware si disponible. Retourne None si KO."""
+    # Le backend FFmpeg d'OpenCV ouvre aussi bien un fichier qu'une URL réseau
+    # (http, rtsp, ftp...). Or ce chemin vient du client (deep link
+    # `ebp://analyzeChunks`) : sans ce garde-fou, une page web ferait émettre à
+    # la machine des requêtes vers son propre réseau (SSRF).
+    if not os.path.isfile(video_path):
+        return None
     if sys.platform == 'darwin':
         CAP = cv2.VideoCapture(video_path, cv2.CAP_AVFOUNDATION)
     else:
