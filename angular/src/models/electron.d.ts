@@ -196,6 +196,7 @@ export interface ElectronAPI {
   arenaCaptureStop: () => Promise<ArenaCaptureStatus>;
   arenaAudioGetLevel: () => Promise<ArenaAudioLevel>;
   arenaOpenFolder: () => Promise<void>;
+  arenaOpenLogsFolder: () => Promise<void>;
   arenaMoveFolder: () => Promise<{
     success: boolean;
     root?: string;

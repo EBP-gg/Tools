@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   arenaAudioGetLevel: () => ipcRenderer.invoke("arena-audio-level"),
   // The front-end asks the server to open the arena working folder in the explorer.
   arenaOpenFolder: () => ipcRenderer.invoke("arena-open-folder"),
+  // The front-end asks the server to open the log folder in the explorer.
+  arenaOpenLogsFolder: () => ipcRenderer.invoke("arena-open-logs-folder"),
   // The front-end asks the server to move the arena working folder to a new location.
   arenaMoveFolder: () => ipcRenderer.invoke("arena-move-folder"),
 

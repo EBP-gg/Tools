@@ -68,6 +68,16 @@ See LICENSE for terms. Unauthorized use is prohibited.
               </button>
               <button
                 type="button"
+                class="squared mr-1"
+                (click)="openLogsFolder()"
+                matTooltip="{{
+                  'view.arena_mode.capture.openLogsFolder' | translate
+                }}"
+              >
+                <i class="fa-sharp fa-solid fa-file-lines"></i>
+              </button>
+              <button
+                type="button"
                 class="squared"
                 [disabled]="captureStatus?.running"
                 (click)="moveFolder()"

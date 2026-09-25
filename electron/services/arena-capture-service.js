@@ -106,6 +106,11 @@ const RESTART_BASE_DELAY_MS = 5 * 1000;
 // n'est pas un flux, c'est une preuve de source.
 const PREVIEW_FPS = '1/2';
 const PREVIEW_WIDTH = 480;
+// Image figée depuis une minute : écran « caméra virtuelle inactive » d'OBS,
+// écran éteint ou noir… ffmpeg enregistre alors sans rien signaler. Posé sur
+// la branche d'aperçu (déjà en RAM, 1 image / 2 s), il ne coûte rien ; ffmpeg
+// logge `freeze_start` puis `freeze_end`, recopiés dans les logs.
+const FREEZE_FILTER = 'freezedetect=d=60';
 // FUSIBLE. La sortie d'aperçu ajoute une branche au filtergraph, et sur le
 // montage NVENC zéro-copie cette branche impose un `hwdownload` — celui-là même
 // qui a déjà fait échouer NVENC quand il était sur le chemin de l'encodeur. Si
@@ -421,7 +426,7 @@ async function listVideoDevices() {
  * impossible sans filtre GPU supplémentaire.
  */
 function previewFilters() {
-    return `hwdownload,format=bgra,fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1`;
+    return `hwdownload,format=bgra,fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}`;
 }
 
 /**
@@ -513,7 +518,7 @@ function buildFfmpegArgs(device, withPreview) {
         // Images déjà en RAM sur ce chemin : la branche d'aperçu ne coûte
         // qu'une réduction.
         const GRAPH = withPreview
-            ? `${FILTERS.join(',')},split=2[v][p];[p]fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1[pv]`
+            ? `${FILTERS.join(',')},split=2[v][p];[p]fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}[pv]`
             : `${FILTERS.join(',')}[v]`;
         inputArgs = [
             '-init_hw_device', 'd3d11va=dda',
@@ -587,7 +592,7 @@ function buildFfmpegArgs(device, withPreview) {
             ? [
                   ...(USES_FILTER_GRAPH
                       ? ['-map', '[pv]']
-                      : ['-map', '0:v', '-vf', `fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1`]),
+                      : ['-map', '0:v', '-vf', `fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}`]),
                   '-f', 'image2',
                   '-update', '1',
                   '-y',
@@ -675,7 +680,9 @@ function startCapture() {
 
     const WITH_PREVIEW = !previewDisabled;
     const ARGS = buildFfmpegArgs(resolvedDevice, WITH_PREVIEW);
-    console.log(`[arena-capture] starting: ${FFMPEG_PATH} ${ARGS.join(' ')}`);
+    console.log(
+        `[arena-capture] starting on "${resolvedDevice.name}" (${resolvedDevice.kind || 'camera'}): ${FFMPEG_PATH} ${ARGS.join(' ')}`
+    );
     const PROC = spawn(FFMPEG_PATH, ARGS, { stdio: ['pipe', 'ignore', 'pipe'] });
     ffmpegProcess = PROC;
     startedAt = Date.now();
@@ -694,6 +701,11 @@ function startCapture() {
         const LINE = d.toString().trim();
         if (!LINE) return;
         const IS_PROGRESS = /^frame=/.test(LINE);
+        for (const FREEZE of LINE.match(/freeze_(start|end): [\d.]+/g) || []) {
+            console.warn(
+                `[arena-capture] image figée sur "${resolvedDevice.name}" — ${FREEZE}`
+            );
+        }
         // La progression sort dix fois par seconde : la laisser entrer dans le
         // tail noierait le diagnostic qu'on y cherche en cas de mort.
         if (!IS_PROGRESS) {
@@ -846,6 +858,9 @@ function stopCapture() {
  * @param {{id: string, name: string}} device
  */
 function setDeviceAndRestart(device) {
+    console.log(
+        `[arena-capture] source choisie : "${device && device.name}" (${device && device.id})`
+    );
     setDevice(device);
     detectedMode = null;
     if (ffmpegProcess) {

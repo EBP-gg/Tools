@@ -62,6 +62,9 @@ if (require('electron-squirrel-startup')) {
     return;
 }
 
+// Logs sur disque, avant tout le reste : ce qui est loggé avant n'y est pas.
+require('./core/file-logger').install();
+
 // Détournement de `spawn`/`execFile` pour savoir si Tools travaille. Il DOIT
 // précéder les `require` qui suivent : chacun capture ces fonctions au
 // chargement, et celui qui les capturerait avant lancerait des processus
@@ -2869,6 +2872,13 @@ if (!APP_GOT_THE_LOCK) {
             );
             if (!fs.existsSync(ROOT)) fs.mkdirSync(ROOT, { recursive: true });
             shell.openPath(ROOT);
+        });
+
+        // The front-end asks the server to open the log folder in the explorer.
+        ipcMain.handle('arena-open-logs-folder', () => {
+            const DIR = require('./core/file-logger').getLogDir();
+            if (!fs.existsSync(DIR)) fs.mkdirSync(DIR, { recursive: true });
+            shell.openPath(DIR);
         });
 
         // The front-end asks the server to start/stop the capture.

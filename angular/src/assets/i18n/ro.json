@@ -172,6 +172,7 @@
         "start": "Pornește captura",
         "stop": "Oprește captura",
         "openFolder": "Deschide folderul de lucru",
+        "openLogsFolder": "Deschide folderul de jurnale",
         "moveFolder": "Mută folderul de lucru",
         "moveFolderStopFirst": "Opriți captura înainte de a muta folderul",
         "audio": {

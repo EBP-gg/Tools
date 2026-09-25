@@ -172,6 +172,7 @@
         "start": "Start capture",
         "stop": "Stop capture",
         "openFolder": "Open working folder",
+        "openLogsFolder": "Open logs folder",
         "moveFolder": "Move working folder",
         "moveFolderStopFirst": "Stop the capture before moving the folder",
         "audio": {

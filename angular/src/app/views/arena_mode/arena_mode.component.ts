@@ -499,6 +499,11 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
     window.electronAPI.arenaOpenFolder();
   }
 
+  /** Ouvre le dossier des logs de Tools (tools-AAAA-MM-JJ.log). */
+  protected openLogsFolder(): void {
+    window.electronAPI.arenaOpenLogsFolder();
+  }
+
   /**
    * Déplace le dossier de travail (EBP-Tools-Arena) vers un emplacement
    * choisi par l'utilisateur. Refusé pendant la captation ; les vidéos en

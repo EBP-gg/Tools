@@ -172,6 +172,7 @@
         "start": "Avvia l'acquisizione",
         "stop": "Ferma l'acquisizione",
         "openFolder": "Apri la cartella di lavoro",
+        "openLogsFolder": "Apri la cartella dei log",
         "moveFolder": "Sposta la cartella di lavoro",
         "moveFolderStopFirst": "Ferma l'acquisizione prima di spostare la cartella",
         "audio": {

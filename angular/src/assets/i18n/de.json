@@ -172,6 +172,7 @@
         "start": "Aufnahme starten",
         "stop": "Aufnahme stoppen",
         "openFolder": "Arbeitsordner öffnen",
+        "openLogsFolder": "Log-Ordner öffnen",
         "moveFolder": "Arbeitsordner verschieben",
         "moveFolderStopFirst": "Stoppen Sie die Aufnahme, bevor Sie den Ordner verschieben",
         "audio": {

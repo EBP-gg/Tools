@@ -172,6 +172,7 @@
         "start": "Iniciar a captação",
         "stop": "Parar a captação",
         "openFolder": "Abrir a pasta de trabalho",
+        "openLogsFolder": "Abrir a pasta de registos",
         "moveFolder": "Mover a pasta de trabalho",
         "moveFolderStopFirst": "Pare a captação antes de mover a pasta",
         "audio": {

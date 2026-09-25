@@ -172,6 +172,7 @@
         "start": "Démarrer la captation",
         "stop": "Arrêter la captation",
         "openFolder": "Ouvrir le dossier de travail",
+        "openLogsFolder": "Ouvrir le dossier des logs",
         "moveFolder": "Déplacer le dossier de travail",
         "moveFolderStopFirst": "Arrêtez la captation avant de déplacer le dossier",
         "audio": {

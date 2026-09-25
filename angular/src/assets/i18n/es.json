@@ -172,6 +172,7 @@
         "start": "Iniciar la captura",
         "stop": "Detener la captura",
         "openFolder": "Abrir la carpeta de trabajo",
+        "openLogsFolder": "Abrir la carpeta de registros",
         "moveFolder": "Mover la carpeta de trabajo",
         "moveFolderStopFirst": "Detenga la captura antes de mover la carpeta",
         "audio": {
