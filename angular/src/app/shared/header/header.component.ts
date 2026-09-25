@@ -4,7 +4,7 @@
 
 //#region Import
 
-import { Component, OnInit } from '@angular/core';
+import { Component, NgZone, OnInit } from '@angular/core';
 import { TranslateModule, TranslateService } from '@ngx-translate/core';
 import { Location as CommonLocation } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -50,11 +50,22 @@ export class HeaderComponent implements OnInit {
     protected readonly router: Router,
     protected readonly translateService: TranslateService,
     protected readonly globalService: GlobalService,
+    private readonly ngZone: NgZone
   ) {}
 
   //#region Functions
 
   ngOnInit(): void {
+    // In arena mode, the tool selector is locked on the arena mode page.
+    window.electronAPI?.arenaModeGetState().then((state) => {
+      this.ngZone.run(() => {
+        this.globalService.arenaModeRegistered = state.registered;
+        if (state.registered) {
+          this.page = 'arena_mode';
+        }
+      });
+    });
+
     // List of languages supported by the application.
     this.translateService.addLangs(
       ['fr', 'de', 'en', 'es', 'it', 'ro', 'pt'].sort()

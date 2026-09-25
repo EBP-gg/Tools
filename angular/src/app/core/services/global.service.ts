@@ -30,6 +30,9 @@ export class GlobalService {
   /** Block the entire interface under a loading display. */
   public loading: string | undefined = undefined;
 
+  /** Le mode salle est enregistré sur ce poste : l'application y est verrouillée. */
+  public arenaModeRegistered: boolean = false;
+
   /** URL to access the EBP Discord server. */
   public readonly discordServerURL: string = 'https://discord.gg/tAHAc9q3aX';
 

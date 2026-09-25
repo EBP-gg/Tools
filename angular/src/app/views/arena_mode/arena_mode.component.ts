@@ -21,6 +21,7 @@ import { FormsModule } from '@angular/forms';
 
 import { ToastrService } from 'ngx-toastr';
 import { MessageComponent } from '../../shared/message/message.component';
+import { GlobalService } from '../../core/services/global.service';
 import {
   ArenaAudioLevel,
   ArenaCaptureDevice,
@@ -116,7 +117,8 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   constructor(
     private readonly toastrService: ToastrService,
     private readonly ngZone: NgZone,
-    private readonly translateService: TranslateService
+    private readonly translateService: TranslateService,
+    private readonly globalService: GlobalService
   ) {}
 
   //#region Functions
@@ -125,6 +127,7 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
     window.electronAPI.arenaModeGetState().then((state: ArenaModeState) => {
       this.ngZone.run(() => {
         this.state = state;
+        this.globalService.arenaModeRegistered = state.registered;
         if (state.registered) {
           this.initCapture();
         } else {
@@ -579,6 +582,7 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
           this.registering = false;
           if (result.success && result.state) {
             this.state = result.state;
+            this.globalService.arenaModeRegistered = result.state.registered;
             this.key = undefined;
             this.initCapture();
           } else {
@@ -610,6 +614,7 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
     window.electronAPI.arenaModeUnregister().then((state: ArenaModeState) => {
       this.ngZone.run(() => {
         this.state = state;
+        this.globalService.arenaModeRegistered = state.registered;
         this.stopAudioMonitor();
       });
     });

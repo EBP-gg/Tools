@@ -15,7 +15,7 @@ See LICENSE for terms. Unauthorized use is prohibited.
 <a
   class="btn squared"
   routerLink="/{{ translateService.getCurrentLang() }}"
-  (click)="page = undefined"
+  (click)="page = globalService.arenaModeRegistered ? 'arena_mode' : undefined"
   matTooltip="{{ 'shared.header.home' | translate }}"
 >
   <i class="fa-sharp fa-solid fa-house"></i>
@@ -23,7 +23,10 @@ See LICENSE for terms. Unauthorized use is prohibited.
 <mat-form-field matTooltip="{{ 'shared.header.changeTool' | translate }}">
   <mat-select [(ngModel)]="page" (selectionChange)="changeTool($event)">
     @for (page of pages; track page) {
-      <mat-option [value]="page">
+      <mat-option
+        [value]="page"
+        [disabled]="globalService.arenaModeRegistered && page != 'arena_mode'"
+      >
         {{ 'shared.header.tools.' + page | translate }}
       </mat-option>
     }
