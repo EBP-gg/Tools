@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('child_process');
-const { screen } = require('electron');
+const { screen, nativeImage } = require('electron');
 const { FFMPEG_PATH } = require('../config/constants');
 const StorageManager = require('../core/storage-manager');
 const arenaAudioService = require('./arena-audio-service');
@@ -31,6 +31,8 @@ const arenaModeService = require('./arena-mode-service');
 
 const SETTINGS_KEY_DEVICE = 'arenaCaptureDevice';
 const SETTINGS_KEY_SPOOL = 'arenaSpoolFolder';
+// Scène : webcam et images posées PAR-DESSUS le jeu, qui reste en plein cadre.
+const SETTINGS_KEY_SCENE = 'arenaScene';
 const SEGMENT_SECONDS = 300;
 // Réglages d'encodage : à ajuster sur le matériel réel des salles (NVENC si
 // GPU NVIDIA). videotoolbox = encodage matériel macOS (dev), libx264
@@ -120,6 +122,22 @@ const FREEZE_FILTER = 'freezedetect=d=60';
 const PREVIEW_FUSE_MS = 10 * 1000;
 let previewDisabled = false;
 const RESTART_MAX_DELAY_MS = 60 * 1000;
+// Plus aucune image encodée depuis ce délai alors que ffmpeg tourne : le graphe
+// est bloqué (une webcam qui cesse d'émettre peut suffire à le figer). On tue
+// ffmpeg pour laisser jouer la relance, plutôt que d'enregistrer du vide.
+const STALL_MS = 30 * 1000;
+// Réintégration d'une webcam écartée après une panne : on vérifie qu'elle est
+// revenue, avec un délai qui double à chaque échec pour qu'une webcam prise
+// par un autre logiciel ne coupe pas l'enregistrement toutes les minutes.
+const WEBCAM_RETRY_BASE_MS = 60 * 1000;
+const WEBCAM_RETRY_MAX_MS = 30 * 60 * 1000;
+// Source « Tools Virtual Scene » : la fenêtre du jeu, plus webcam et images.
+// La capture de fenêtre est propre à Windows ; sur macOS (dev) le jeu est
+// remplacé par le premier écran, pour pouvoir travailler l'éditeur.
+const SCENE_DEVICE = { id: 'tools-scene', name: 'Tools Virtual Scene', kind: 'scene' };
+// Attente de la fenêtre du jeu : c'est le délai de démarrage d'une game après
+// l'ouverture du jeu, il doit rester court (l'analyseur a besoin du début).
+const GAME_POLL_MS = 3000;
 
 let ffmpegProcess = null;
 let stopRequested = false;
@@ -146,6 +164,16 @@ let resolutionRejected = false;
 // n'est enregistré : ddagrab ne produit une image que lorsque l'écran change,
 // et sur un écran figé l'attente peut durer des dizaines de secondes.
 let videoStarted = false;
+// Webcam de la scène écartée après une panne de ffmpeg : l'enregistrement
+// continue sans elle jusqu'à ce qu'elle réapparaisse (cf. scheduleWebcamRetry).
+let webcamSuspended = false;
+let webcamRetryTimer = null;
+let webcamRetryDelayMs = WEBCAM_RETRY_BASE_MS;
+// Scène armée, en attente de la fenêtre du jeu. Le jeton invalide une attente
+// en cours quand la captation est arrêtée ou relancée.
+let waitingGame = false;
+let gameWaitTimer = null;
+let gameWaitToken = 0;
 
 /**
  * Extrait les modes supportés ("1920x1080@[15.000000 60.000000]fps") du stderr
@@ -280,7 +308,13 @@ function listCaptureDevices() {
     const CAMERAS = DEVICES.filter(
         (d) => !IS_SCREEN.test(d.name) && IS_VIRTUAL.test(d.name)
     ).map((d) => ({ id: d.id, name: d.name, kind: 'camera' }));
-    return { screens: SCREENS, cameras: CAMERAS };
+    // Webcams de la scène : toutes les caméras, physiques comprises. Leur
+    // aperçu passe par l'image assemblée par ffmpeg, donc leur exclusivité
+    // sous Windows n'est plus un obstacle.
+    const WEBCAMS = DEVICES.filter((d) => !IS_SCREEN.test(d.name)).map(
+        (d) => ({ id: d.id, name: d.name, kind: 'webcam' })
+    );
+    return { screens: SCREENS, cameras: CAMERAS, webcams: WEBCAMS };
 }
 
 /**
@@ -413,10 +447,10 @@ async function listWindowsScreens() {
  * (montages existants encore en service).
  */
 async function listVideoDevices() {
-    const { screens, cameras } = listCaptureDevices();
+    const { screens, cameras, webcams } = listCaptureDevices();
     const SCREENS =
         process.platform === 'darwin' ? screens : await listWindowsScreens();
-    return [...SCREENS, ...cameras];
+    return [...SCREENS, ...cameras, SCENE_DEVICE, ...webcams];
 }
 
 /**
@@ -430,21 +464,132 @@ function previewFilters() {
 }
 
 /**
+ * Éléments à poser sur le jeu pour ce démarrage, dans l'ordre d'empilement :
+ * la webcam (sauf si elle est écartée), puis les images. Une image dont le
+ * fichier a disparu est ignorée : elle ne doit pas empêcher d'enregistrer.
+ */
+function sceneOverlays() {
+    const SCENE = getScene();
+    const ITEMS = [];
+    if (SCENE.webcam && !webcamSuspended) {
+        let id = SCENE.webcam.id;
+        // macOS (dev) : les index avfoundation ne sont pas stables (cf.
+        // startCapture), on re-résout par le nom.
+        if (process.platform === 'darwin') {
+            const MATCH = listCaptureDevices().webcams.find(
+                (d) => d.name === SCENE.webcam.name
+            );
+            id = MATCH ? MATCH.id : null;
+        }
+        if (id) {
+            ITEMS.push({ ...SCENE.webcam, id, kind: 'webcam' });
+        } else {
+            console.warn(
+                `[arena-capture] webcam "${SCENE.webcam.name}" introuvable — ignorée`
+            );
+        }
+    }
+    for (const IMAGE of SCENE.images) {
+        const FILE = path.join(getSceneFolder(), IMAGE.file);
+        if (fs.existsSync(FILE)) {
+            ITEMS.push({ ...IMAGE, path: FILE, kind: 'image' });
+        } else {
+            console.warn(`[arena-capture] image de scène absente : ${FILE}`);
+        }
+    }
+    return ITEMS;
+}
+
+/**
+ * Entrées et filtergraph de la scène : la fenêtre du jeu en plein cadre, puis
+ * chaque élément redimensionné et posé par `overlay`.
+ *
+ * Le jeu est filmé PAR SA FENÊTRE (Windows Graphics Capture), repérée par le
+ * nom de son exécutable comme le son (cf. arena-audio-service) : ni numéro
+ * d'écran à deviner, ni écran qui disparaît. La fenêtre est ramenée en 1080p
+ * par la capture elle-même. `max_framerate=60` : plafonnée à 30, la capture
+ * sautait des images (13 % de doublons mesurés en salle, ~0 à 60).
+ *
+ * L'assemblage se fait en RAM, quelle que soit la carte graphique : les
+ * filtres GPU diffèrent d'un constructeur à l'autre, `overlay` marche partout.
+ * Aucun device n'est passé à l'encodeur : c'est ce qui faisait refuser à NVENC
+ * les images redescendues en RAM. Montage validé en salle avec NVENC comme
+ * avec libx264.
+ *
+ * @param {number} firstInput Index de la première entrée ajoutée ici (le son,
+ *   s'il existe, est l'entrée 0).
+ */
+function sceneArgs(withPreview, overlays, firstInput) {
+    const IS_MAC = process.platform === 'darwin';
+    const ARGS = [];
+    const CHAINS = [];
+    let input = firstInput;
+    if (IS_MAC) {
+        // Dev : pas de capture de fenêtre, le premier écran tient lieu de jeu
+        // (déformé s'il n'est pas en 16/9, comme le chemin écran macOS).
+        const SCREEN = listCaptureDevices().screens[0];
+        ARGS.push(
+            '-f', 'avfoundation',
+            '-framerate', String(OUTPUT_FPS),
+            '-i', `${SCREEN ? SCREEN.id : 0}:none`
+        );
+        CHAINS.push(`[${input++}:v]scale=1920:1080[s0]`);
+    } else {
+        // Un seul des jeux tourne à la fois : une alternative suffit.
+        const EXES = arenaAudioService.TARGET_EXECUTABLES.map((exe) =>
+            exe.replace(/\.exe$/i, '')
+        ).join('|');
+        CHAINS.push(
+            `gfxcapture=window_exe='(?i)${EXES}':max_framerate=60:capture_cursor=0:width=1920:height=1080:resize_mode=scale_aspect,hwdownload,format=bgra[s0]`
+        );
+    }
+    overlays.forEach((item, i) => {
+        if (item.kind === 'webcam') {
+            ARGS.push(
+                ...(IS_MAC
+                    ? ['-f', 'avfoundation', '-framerate', '30', '-i', `${item.id}:none`]
+                    : ['-f', 'dshow', '-rtbufsize', '256M', '-i', `video=${item.id}`])
+            );
+        } else {
+            // Une seule image décodée : `overlay` répète la dernière image
+            // d'une entrée terminée (eof_action=repeat), inutile de la boucler.
+            ARGS.push('-i', item.path);
+        }
+        CHAINS.push(
+            `[${input++}:v]scale=${item.width}:${item.height}[o${i}]`,
+            `[s${i}][o${i}]overlay=${item.x}:${item.y}[s${i + 1}]`
+        );
+    });
+    const OUT = `[s${overlays.length}]format=yuv420p`;
+    if (withPreview) {
+        CHAINS.push(
+            `${OUT},split=2[v][p]`,
+            `[p]fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}[pv]`
+        );
+    } else {
+        CHAINS.push(`${OUT}[v]`);
+    }
+    return [...ARGS, '-filter_complex', CHAINS.join(';'), '-map', '[v]'];
+}
+
+/**
  * @param {object} device
  * @param {boolean} withPreview  Ajoute la sortie d'aperçu. Coupé par le fusible
  *   après un échec de démarrage (cf. PREVIEW_FUSE_MS).
+ * @param {object[]} overlays  Éléments de la scène (cf. sceneOverlays).
  */
-function buildFfmpegArgs(device, withPreview) {
+function buildFfmpegArgs(device, withPreview, overlays = []) {
     const IS_MAC = process.platform === 'darwin';
     const SPOOL = getSpoolFolder();
     const IS_SCREEN = device.kind === 'screen';
+    const IS_SCENE = device.kind === 'scene';
     // Pas d'audio : ni la caméra virtuelle ni ddagrab n'en transportent. Le son
     // fera l'objet d'une entrée séparée (capture par processus).
     const ENCODER = resolveEncoder();
-    // Le son n'existe que sur le chemin écran de Windows : le loopback est une
-    // API Windows, et le chemin caméra est transitoire (montages existants) —
+    // Le son n'existe que sur les chemins écran et scène de Windows : le
+    // loopback est une API Windows, et le chemin caméra est transitoire (montages existants) —
     // on ne touche pas à sa ligne de commande, qui fonctionne.
-    const WITH_AUDIO = IS_SCREEN && process.platform === 'win32';
+    const WITH_AUDIO = (IS_SCREEN || IS_SCENE) && process.platform === 'win32';
     // Entrée audio EN PREMIER : la vidéo du chemin écran vient d'un
     // filtergraph sans `-i`, donc le tube est l'entrée 0 et `-map 0:a` est
     // stable quel que soit l'encodeur retenu.
@@ -463,7 +608,9 @@ function buildFfmpegArgs(device, withPreview) {
     // Images matérielles : `-pix_fmt` n'a pas de sens dessus, c'est l'encodeur
     // qui convertit. Renseigné par les branches logicielles uniquement.
     let pixFmtArgs = ['-pix_fmt', 'yuv420p'];
-    if (IS_SCREEN && !IS_MAC && ENCODER.name === 'h264_nvenc') {
+    if (IS_SCENE) {
+        inputArgs = sceneArgs(withPreview, overlays, WITH_AUDIO ? 1 : 0);
+    } else if (IS_SCREEN && !IS_MAC && ENCODER.name === 'h264_nvenc') {
         // Chemin ZÉRO-COPIE : les images restent sur le GPU de ddagrab jusqu'à
         // NVENC, sans jamais passer en RAM.
         //
@@ -557,7 +704,7 @@ function buildFfmpegArgs(device, withPreview) {
     // Les chemins ddagrab produisent leur flux par `-filter_complex` : l'aperçu
     // y est un label du graphe. Les autres ont un `-i`, l'aperçu s'y filtre
     // directement sur sa propre sortie.
-    const USES_FILTER_GRAPH = IS_SCREEN && !IS_MAC;
+    const USES_FILTER_GRAPH = IS_SCENE || (IS_SCREEN && !IS_MAC);
     // Sortie en CFR : les caméras (surtout virtuelles) livrent des timestamps
     // irréguliers qui, sans ça, produisent un temps média ≠ temps réel (fps
     // annoncés délirants, frames dupliquées) — ce qui fausse la durée des
@@ -606,7 +753,7 @@ function buildFfmpegArgs(device, withPreview) {
  * Démarre la captation sur le périphérique configuré. No-op si déjà en cours
  * ou si aucun périphérique n'est configuré.
  */
-function startCapture() {
+function startCapture(gameFound = false) {
     if (ffmpegProcess) return getStatus();
     const DEVICE = getDevice();
     if (!DEVICE || !DEVICE.id) {
@@ -623,11 +770,21 @@ function startCapture() {
     resolutionRejected = false;
     videoStarted = false;
 
+    // Scène : rien à filmer tant que le jeu n'est pas ouvert. La captation est
+    // armée et ffmpeg démarre dès que sa fenêtre apparaît. Sur macOS (dev), le
+    // jeu n'est pas détectable et l'écran le remplace : on démarre tout de suite.
+    const WAITS_FOR_GAME =
+        DEVICE.kind === 'scene' && process.platform === 'win32';
+    if (WAITS_FOR_GAME && !gameFound) {
+        waitForGame();
+        return getStatus();
+    }
+
     // Les index avfoundation ne sont PAS stables (un iPhone en continuité ou
     // une webcam débranchée décale tout) : on re-résout l'index par le NOM à
     // chaque démarrage. Windows/dshow adresse déjà par nom, rien à faire.
     let resolvedDevice = DEVICE;
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && DEVICE.kind !== 'scene') {
         const { screens, cameras } = listCaptureDevices();
         const MATCH = [...screens, ...cameras].find(
             (d) => d.name === DEVICE.name
@@ -674,12 +831,17 @@ function startCapture() {
     }
 
     // Le tube doit écouter AVANT que ffmpeg tente de l'ouvrir.
-    if (resolvedDevice.kind === 'screen' && process.platform === 'win32') {
+    if (
+        (resolvedDevice.kind === 'screen' || resolvedDevice.kind === 'scene') &&
+        process.platform === 'win32'
+    ) {
         arenaAudioService.start();
     }
 
     const WITH_PREVIEW = !previewDisabled;
-    const ARGS = buildFfmpegArgs(resolvedDevice, WITH_PREVIEW);
+    const OVERLAYS = resolvedDevice.kind === 'scene' ? sceneOverlays() : [];
+    const WITH_WEBCAM = OVERLAYS.some((o) => o.kind === 'webcam');
+    const ARGS = buildFfmpegArgs(resolvedDevice, WITH_PREVIEW, OVERLAYS);
     console.log(
         `[arena-capture] starting on "${resolvedDevice.name}" (${resolvedDevice.kind || 'camera'}): ${FFMPEG_PATH} ${ARGS.join(' ')}`
     );
@@ -697,10 +859,32 @@ function startCapture() {
     // arena-audio-service). Elle ne sert plus qu'à l'affichage et au
     // diagnostic.
     let firstFrameSeen = false;
+    let lastFrame = 0;
+    let lastFrameAt = Date.now();
+    const STALL_TIMER = setInterval(() => {
+        if (ffmpegProcess !== PROC) {
+            clearInterval(STALL_TIMER);
+            return;
+        }
+        if (videoStarted && Date.now() - lastFrameAt > STALL_MS) {
+            clearInterval(STALL_TIMER);
+            console.error(
+                `[arena-capture] plus aucune image depuis ${STALL_MS / 1000}s — ffmpeg arrêté pour être relancé`
+            );
+            PROC.kill();
+        }
+    }, 5000);
     PROC.stderr.on('data', (d) => {
         const LINE = d.toString().trim();
         if (!LINE) return;
         const IS_PROGRESS = /^frame=/.test(LINE);
+        if (IS_PROGRESS) {
+            const FRAME = /frame=\s*(\d+)/.exec(LINE);
+            if (FRAME && Number(FRAME[1]) !== lastFrame) {
+                lastFrame = Number(FRAME[1]);
+                lastFrameAt = Date.now();
+            }
+        }
         for (const FREEZE of LINE.match(/freeze_(start|end): [\d.]+/g) || []) {
             console.warn(
                 `[arena-capture] image figée sur "${resolvedDevice.name}" — ${FREEZE}`
@@ -752,6 +936,7 @@ function startCapture() {
     });
 
     PROC.on('close', (code) => {
+        clearInterval(STALL_TIMER);
         if (ffmpegProcess !== PROC) return;
         ffmpegProcess = null;
         startedAt = null;
@@ -766,6 +951,42 @@ function startCapture() {
         // reste affichée jusqu'à ce que la source soit corrigée et la captation
         // relancée manuellement.
         if (resolutionRejected) return;
+        // Scène : ffmpeg s'arrête aussi quand le jeu se ferme (passage
+        // d'After-H à Color Chaos, plantage). Ce n'est pas une panne : on se
+        // remet en attente de sa fenêtre, sans backoff ni fusible.
+        if (!WAITS_FOR_GAME) {
+            handleDeath(code);
+            return;
+        }
+        arenaAudioService.findTarget().then((target) => {
+            if (stopRequested || ffmpegProcess || restartTimer) return;
+            if (target) {
+                handleDeath(code);
+                return;
+            }
+            console.log(
+                `[arena-capture] jeu fermé (code ${code}) — en attente de sa fenêtre`
+            );
+            startCapture();
+        });
+    });
+
+    /** Mort inattendue de ffmpeg : relance adaptée à la cause probable. */
+    function handleDeath(code) {
+        // Webcam de la scène : la source la plus fragile (débranchée, prise
+        // par un autre logiciel), et optionnelle. Sa perte ne doit jamais
+        // coûter l'enregistrement du jeu : on relance aussitôt sans elle, et
+        // on la réintègre quand elle réapparaît. Testé AVANT le mode imposé et
+        // le fusible d'aperçu, qui lui attribueraient sinon l'échec.
+        if (WITH_WEBCAM) {
+            webcamSuspended = true;
+            console.warn(
+                `[arena-capture] ffmpeg died (code ${code}) avec la webcam — relance sans elle —\n${stderrTail.join('\n')}`
+            );
+            scheduleWebcamRetry();
+            startCapture();
+            return;
+        }
         // Mode refusé par le périphérique : ffmpeg vient de logger la liste des
         // modes supportés → on adopte le premier S'IL est en 1080p et on
         // relance immédiatement (une seule fois par mode pour ne pas boucler).
@@ -795,7 +1016,13 @@ function startCapture() {
         // démarrage, pas après une heure. On coupe l'aperçu pour la session et
         // on relance sans attendre le backoff : la salle ne doit pas perdre
         // d'enregistrement le temps qu'on comprenne.
-        if (WITH_PREVIEW && Date.now() - STARTED_AT < PREVIEW_FUSE_MS) {
+        // Sans objet pour la scène, dont l'aperçu est pris en RAM après
+        // l'assemblage : une mort précoce y vient de la fenêtre ou de la webcam.
+        if (
+            WITH_PREVIEW &&
+            resolvedDevice.kind !== 'scene' &&
+            Date.now() - STARTED_AT < PREVIEW_FUSE_MS
+        ) {
             previewDisabled = true;
             lastError = null;
             console.warn(
@@ -818,11 +1045,13 @@ function startCapture() {
             restartDelayMs = Math.min(restartDelayMs * 2, RESTART_MAX_DELAY_MS);
             startCapture();
         }, restartDelayMs);
-    });
+    }
 
     // Un run sain depuis > 2 min réarme le backoff.
     setTimeout(() => {
-        if (ffmpegProcess === PROC) restartDelayMs = RESTART_BASE_DELAY_MS;
+        if (ffmpegProcess !== PROC) return;
+        restartDelayMs = RESTART_BASE_DELAY_MS;
+        if (WITH_WEBCAM) webcamRetryDelayMs = WEBCAM_RETRY_BASE_MS;
     }, 2 * 60 * 1000);
 
     return getStatus();
@@ -840,6 +1069,17 @@ function stopCapture() {
         restartTimer = null;
     }
     restartDelayMs = RESTART_BASE_DELAY_MS;
+    // Arrêt voulu (ou changement de source/scène) : la webcam retente sa chance
+    // au prochain démarrage.
+    webcamSuspended = false;
+    if (webcamRetryTimer) {
+        clearTimeout(webcamRetryTimer);
+        webcamRetryTimer = null;
+    }
+    webcamRetryDelayMs = WEBCAM_RETRY_BASE_MS;
+    gameWaitToken++;
+    waitingGame = false;
+    clearTimeout(gameWaitTimer);
     if (ffmpegProcess) {
         try {
             ffmpegProcess.stdin.write('q');
@@ -863,13 +1103,200 @@ function setDeviceAndRestart(device) {
     );
     setDevice(device);
     detectedMode = null;
-    if (ffmpegProcess) {
-        // Redémarrage sur le nouveau périphérique une fois l'ancien arrêté.
-        const OLD = ffmpegProcess;
-        stopCapture();
-        OLD.on('close', () => startCapture());
+    // Redémarrage sur le nouveau périphérique une fois l'ancien arrêté — y
+    // compris depuis une scène qui attendait encore la fenêtre du jeu.
+    if (ffmpegProcess || waitingGame) {
+        restartCapture();
     }
     return getStatus();
+}
+
+/**
+ * Attend que le jeu soit ouvert (même détection que le son), puis démarre
+ * ffmpeg sur sa fenêtre.
+ */
+function waitForGame() {
+    if (waitingGame) return;
+    waitingGame = true;
+    const TOKEN = ++gameWaitToken;
+    let logged = false;
+    const CHECK = () => {
+        arenaAudioService.findTarget().then((target) => {
+            if (TOKEN !== gameWaitToken) return;
+            if (stopRequested || ffmpegProcess) {
+                waitingGame = false;
+                return;
+            }
+            if (!target) {
+                if (!logged) {
+                    console.log('[arena-capture] en attente de la fenêtre du jeu');
+                    logged = true;
+                }
+                gameWaitTimer = setTimeout(CHECK, GAME_POLL_MS);
+                return;
+            }
+            waitingGame = false;
+            console.log(`[arena-capture] jeu ouvert (${target.exe}) — démarrage`);
+            startCapture(true);
+        });
+    };
+    CHECK();
+}
+
+/** Relance ffmpeg sur la configuration courante, une fois l'actuel arrêté. */
+function restartCapture() {
+    const OLD = ffmpegProcess;
+    stopCapture();
+    if (OLD) {
+        OLD.on('close', () => startCapture());
+    } else {
+        startCapture();
+    }
+}
+
+/**
+ * Réintègre la webcam écartée dès qu'elle réapparaît dans la liste des
+ * périphériques. Si elle échoue encore, ffmpeg la réécarte et le délai double.
+ */
+function scheduleWebcamRetry() {
+    if (webcamRetryTimer) return;
+    webcamRetryTimer = setTimeout(() => {
+        webcamRetryTimer = null;
+        const WEBCAM = getScene().webcam;
+        if (!webcamSuspended || !WEBCAM || stopRequested) return;
+        // Entre deux relances : on repassera plus tard.
+        if (!ffmpegProcess) {
+            scheduleWebcamRetry();
+            return;
+        }
+        const FOUND = listCaptureDevices().webcams.some((d) =>
+            process.platform === 'darwin'
+                ? d.name === WEBCAM.name
+                : d.id === WEBCAM.id
+        );
+        if (!FOUND) {
+            scheduleWebcamRetry();
+            return;
+        }
+        const DELAY = Math.min(webcamRetryDelayMs * 2, WEBCAM_RETRY_MAX_MS);
+        console.log(
+            `[arena-capture] webcam "${WEBCAM.name}" de retour — relance avec elle`
+        );
+        restartCapture();
+        // Posé APRÈS restartCapture, dont l'arrêt remet le délai à sa base.
+        webcamRetryDelayMs = DELAY;
+    }, webcamRetryDelayMs);
+}
+
+/** Images de la scène : à côté de spool/, déplacées avec EBP-Tools-Arena. */
+function getSceneFolder() {
+    return path.join(path.dirname(getSpoolFolder()), 'scene');
+}
+
+/**
+ * Scène enregistrée. Coordonnées en pixels du cadre 1920×1080 ; les images ne
+ * gardent que leur nom de fichier, pour survivre au déplacement du dossier.
+ * @returns {{webcam: object|null, images: object[]}}
+ */
+function getScene() {
+    const SCENE = StorageManager.getPermanentSettingsValue(SETTINGS_KEY_SCENE);
+    return {
+        webcam: (SCENE && SCENE.webcam) || null,
+        images: (SCENE && SCENE.images) || []
+    };
+}
+
+/**
+ * Position et taille bornées au cadre. Dimensions paires : les formats 4:2:0
+ * n'acceptent pas les tailles impaires.
+ */
+function sanitizeGeometry(item) {
+    const CLAMP = (n, min, max) => Math.min(Math.max(n, min), max);
+    const EVEN = (n) => Math.round((Number(n) || 0) / 2) * 2;
+    const WIDTH = CLAMP(EVEN(item.width), 2, 1920);
+    const HEIGHT = CLAMP(EVEN(item.height), 2, 1080);
+    return {
+        x: CLAMP(Math.round(Number(item.x) || 0), 0, 1920 - WIDTH),
+        y: CLAMP(Math.round(Number(item.y) || 0), 0, 1080 - HEIGHT),
+        width: WIDTH,
+        height: HEIGHT
+    };
+}
+
+/**
+ * Enregistre la scène et l'applique : une captation en cours est relancée
+ * dessus (coupure d'une seconde environ, absorbée par la tolérance du
+ * pipeline entre segments).
+ */
+function setScene(scene) {
+    const CLEAN = {
+        webcam:
+            scene && scene.webcam && scene.webcam.id
+                ? {
+                      id: String(scene.webcam.id),
+                      name: String(scene.webcam.name || ''),
+                      ...sanitizeGeometry(scene.webcam)
+                  }
+                : null,
+        images: (scene && Array.isArray(scene.images) ? scene.images : [])
+            .filter((i) => i && typeof i.file === 'string')
+            // basename : le renderer ne choisit pas où l'on lit sur le disque.
+            .map((i) => ({ file: path.basename(i.file), ...sanitizeGeometry(i) }))
+    };
+    StorageManager.setPermanentSettingsValue(SETTINGS_KEY_SCENE, CLEAN);
+    console.log(
+        `[arena-capture] scène : ${CLEAN.webcam ? `webcam "${CLEAN.webcam.name}"` : 'sans webcam'}, ${CLEAN.images.length} image(s)`
+    );
+    // Les images ajoutées puis retirées ne servent plus à rien.
+    const DIR = getSceneFolder();
+    if (fs.existsSync(DIR)) {
+        const KEEP = new Set(CLEAN.images.map((i) => i.file));
+        for (const NAME of fs.readdirSync(DIR)) {
+            if (!KEEP.has(NAME)) fs.unlinkSync(path.join(DIR, NAME));
+        }
+    }
+    if (ffmpegProcess || waitingGame) {
+        restartCapture();
+    } else {
+        webcamSuspended = false;
+    }
+    return getStatus();
+}
+
+/** Vignette d'une image pour l'éditeur (PNG : la transparence est conservée). */
+function imageThumbnail(image) {
+    return image
+        .resize({ width: Math.min(PREVIEW_WIDTH, image.getSize().width) })
+        .toDataURL();
+}
+
+/**
+ * Copie une image choisie par l'utilisateur dans le dossier de la scène. Elle
+ * n'entre dans la scène qu'à l'application (setScene).
+ * @returns {{file: string, width: number, height: number, url: string}|null}
+ */
+function addSceneImage(sourcePath) {
+    const IMAGE = nativeImage.createFromPath(sourcePath);
+    if (IMAGE.isEmpty()) return null;
+    const DIR = getSceneFolder();
+    fs.mkdirSync(DIR, { recursive: true });
+    const FILE = `${Date.now()}-${path.basename(sourcePath).replace(/[^\w.-]/g, '_')}`;
+    fs.copyFileSync(sourcePath, path.join(DIR, FILE));
+    const { width, height } = IMAGE.getSize();
+    return { file: FILE, width, height, url: imageThumbnail(IMAGE) };
+}
+
+/** Scène + vignette de chaque image, pour l'éditeur. */
+function getSceneView() {
+    const SCENE = getScene();
+    const IMAGE_URLS = {};
+    for (const IMAGE of SCENE.images) {
+        const DATA = nativeImage.createFromPath(
+            path.join(getSceneFolder(), IMAGE.file)
+        );
+        if (!DATA.isEmpty()) IMAGE_URLS[IMAGE.file] = imageThumbnail(DATA);
+    }
+    return { ...SCENE, imageUrls: IMAGE_URLS };
 }
 
 /**
@@ -883,7 +1310,10 @@ function autoStart() {
 function getStatus() {
     const DEVICE = getDevice();
     return {
-        running: !!ffmpegProcess,
+        // Une scène qui attend la fenêtre du jeu est armée : elle compte comme
+        // une captation en cours (l'arrêter reste possible).
+        running: !!ffmpegProcess || waitingGame,
+        waitingGame,
         deviceId: DEVICE ? DEVICE.id : null,
         deviceName: DEVICE ? DEVICE.name : null,
         // L'aperçu du renderer n'ouvre pas une source écran comme une caméra.
@@ -898,6 +1328,8 @@ function getStatus() {
         // Le renderer n'envoie du PCM que si le tube attend réellement du son.
         audio: arenaAudioService.getStatus(),
         videoStarted,
+        // Webcam de la scène écartée après une panne : enregistrement sans elle.
+        webcamSuspended,
         encoder: resolvedEncoder ? resolvedEncoder.name : null,
         startedAt,
         lastError,
@@ -915,5 +1347,8 @@ module.exports = {
     setDeviceAndRestart,
     autoStart,
     getStatus,
-    setSpoolFolder
+    setSpoolFolder,
+    getSceneView,
+    setScene,
+    addSceneImage
 };

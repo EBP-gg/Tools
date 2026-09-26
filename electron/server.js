@@ -2881,6 +2881,43 @@ if (!APP_GOT_THE_LOCK) {
             shell.openPath(DIR);
         });
 
+        // The front-end asks the server for the capture scene (webcam + images).
+        ipcMain.handle('arena-scene-get', () => {
+            return arenaCaptureService.getSceneView();
+        });
+
+        // The front-end asks the server to save and apply the capture scene.
+        ipcMain.handle('arena-scene-set', (event, scene) => {
+            return arenaCaptureService.setScene(scene);
+        });
+
+        // The front-end asks the server to pick an image for the scene.
+        ipcMain.handle('arena-scene-add-image', async () => {
+            const RESULT = await dialog.showOpenDialog(getMainWindow(), {
+                properties: ['openFile'],
+                filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }]
+            });
+            if (RESULT.canceled || !RESULT.filePaths.length) return null;
+            return arenaCaptureService.addSceneImage(RESULT.filePaths[0]);
+        });
+
+        // The front-end polls the image actually recorded (scene included).
+        ipcMain.handle('arena-capture-preview', () => {
+            const STATUS = arenaCaptureService.getStatus();
+            // En attente du jeu, le fichier est celui d'une captation passée.
+            if (!STATUS.running || STATUS.waitingGame || !STATUS.previewPath) {
+                return null;
+            }
+            try {
+                return `data:image/jpeg;base64,${fs
+                    .readFileSync(STATUS.previewPath)
+                    .toString('base64')}`;
+            } catch (_) {
+                // Pas encore écrite : les premières secondes d'une captation.
+                return null;
+            }
+        });
+
         // The front-end asks the server to start/stop the capture.
         ipcMain.handle('arena-capture-start', () => {
             return arenaCaptureService.startCapture();

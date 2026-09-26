@@ -27,7 +27,10 @@ import {
   ArenaCaptureDevice,
   ArenaCaptureStatus,
   ArenaLocation,
-  ArenaModeState
+  ArenaModeState,
+  ArenaScene,
+  ArenaSceneItem,
+  ArenaSceneView
 } from '../../../models/electron';
 
 //#endregion
@@ -42,6 +45,13 @@ const METER_FLOOR_DBFS: number = -60;
 const SILENCE_DELAY_MS: number = 20000;
 /** Cadence du sondage : le helper natif publie un niveau par seconde. */
 const AUDIO_SAMPLE_MS: number = 1000;
+/** Cadre de la scène, en pixels : celui de l'enregistrement. */
+const SCENE_WIDTH: number = 1920;
+const SCENE_HEIGHT: number = 1080;
+/** Plus petite largeur d'un élément de la scène, pour qu'il reste saisissable. */
+const SCENE_MIN_WIDTH: number = 32;
+/** Cadence de l'aperçu de la scène : ffmpeg réécrit l'image toutes les 2 s. */
+const SCENE_PREVIEW_MS: number = 2000;
 
 @Component({
   selector: 'view-arena-mode',
@@ -79,6 +89,29 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   protected screenDevices: ArenaCaptureDevice[] = [];
   protected cameraDevices: ArenaCaptureDevice[] = [];
   protected selectedDeviceId?: string;
+  /** Webcams posables dans la scène, avec un libellé qui distingue les homonymes. */
+  protected webcamOptions: { device: ArenaCaptureDevice; label: string }[] =
+    [];
+  /** Scène en cours d'édition : n'est appliquée que sur « Appliquer ». */
+  protected scene: ArenaScene = { webcam: null, images: [] };
+  /** Scène enregistrée, sérialisée : sert à savoir s'il y a des changements. */
+  private savedScene: string = JSON.stringify(this.scene);
+  protected sceneImageUrls: Record<string, string> = {};
+  /** Webcam choisie dans le sélecteur, '' pour aucune. */
+  protected selectedWebcamId: string = '';
+  /** Image réellement enregistrée (scène comprise), quand la captation tourne. */
+  protected scenePreview: string | null = null;
+  private scenePreviewTimer?: ReturnType<typeof setInterval>;
+  @ViewChild('sceneStage')
+  private sceneStage?: ElementRef<HTMLDivElement>;
+  /** Déplacement ou redimensionnement en cours, en pixels du cadre. */
+  private sceneDrag?: {
+    item: ArenaSceneItem;
+    mode: 'move' | 'resize';
+    startX: number;
+    startY: number;
+    origin: ArenaSceneItem;
+  };
   protected captureStatus?: ArenaCaptureStatus;
   /** Bascule start/stop en cours : désactive le bouton (anti double-clic). */
   protected capturePending: boolean = false;
@@ -169,6 +202,9 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
     if (this.captureStatusTimer) {
       clearInterval(this.captureStatusTimer);
     }
+    if (this.scenePreviewTimer) {
+      clearInterval(this.scenePreviewTimer);
+    }
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.stopPreview();
     this.stopAudioMonitor();
@@ -206,9 +242,11 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   private async startPreview(deviceName: string): Promise<void> {
     // Les sources écran n'ont pas d'aperçu live : leur vignette ddagrab, elle,
     // montre vraiment ce qui sera enregistré.
+    // La scène a le sien, dans son éditeur.
     if (
       this.previewDeviceName === deviceName ||
-      this.captureStatus?.deviceKind === 'screen'
+      this.captureStatus?.deviceKind === 'screen' ||
+      this.captureStatus?.deviceKind === 'scene'
     ) {
       return;
     }
@@ -430,6 +468,13 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   private initCapture(): void {
     this.refreshDevices();
     this.refreshCaptureStatus();
+    this.loadScene();
+    if (!this.scenePreviewTimer) {
+      this.scenePreviewTimer = setInterval(
+        () => this.refreshScenePreview(),
+        SCENE_PREVIEW_MS
+      );
+    }
     if (!this.captureStatusTimer) {
       this.captureStatusTimer = setInterval(
         () => this.refreshCaptureStatus(),
@@ -447,9 +492,26 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
       .arenaCaptureListDevices()
       .then((devices: ArenaCaptureDevice[]) => {
         this.ngZone.run(() => {
-          this.devices = devices;
+          // Les webcams ont leur propre sélecteur : une caméra virtuelle y
+          // figure aussi, avec le même id que dans la liste des sources.
+          this.devices = devices.filter((d) => d.kind !== 'webcam');
           this.screenDevices = devices.filter((d) => d.kind === 'screen');
-          this.cameraDevices = devices.filter((d) => d.kind === 'camera');
+          // Tools Virtual Scene se range avec les caméras virtuelles.
+          this.cameraDevices = devices.filter(
+            (d) => d.kind === 'camera' || d.kind === 'scene'
+          );
+          const WEBCAMS = devices.filter((d) => d.kind === 'webcam');
+          // Deux webcams du même modèle portent le même nom.
+          this.webcamOptions = WEBCAMS.map((device) => {
+            const SAME = WEBCAMS.filter((d) => d.name === device.name);
+            return {
+              device,
+              label:
+                SAME.length > 1
+                  ? `${device.name} (${SAME.indexOf(device) + 1})`
+                  : device.name
+            };
+          });
         });
       });
   }
@@ -496,6 +558,158 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
         });
       });
   }
+
+  //#region Scène
+
+  private loadScene(): void {
+    window.electronAPI.arenaSceneGet().then((view: ArenaSceneView) => {
+      this.ngZone.run(() => {
+        const { imageUrls, ...SCENE } = view;
+        this.scene = SCENE;
+        this.savedScene = JSON.stringify(SCENE);
+        this.sceneImageUrls = imageUrls;
+        this.selectedWebcamId = SCENE.webcam?.id ?? '';
+      });
+    });
+  }
+
+  protected get sceneDirty(): boolean {
+    return JSON.stringify(this.scene) !== this.savedScene;
+  }
+
+  /** Fond de l'éditeur : l'image réellement enregistrée, scène comprise. */
+  protected get sceneBackground(): string | null {
+    return this.scenePreview;
+  }
+
+  private refreshScenePreview(): void {
+    if (document.hidden || !this.captureStatus?.running) {
+      this.scenePreview = null;
+      return;
+    }
+    window.electronAPI.arenaCaptureGetPreview().then((image) => {
+      this.ngZone.run(() => (this.scenePreview = image));
+    });
+  }
+
+  /** Webcam choisie : posée en bas à droite si elle n'était pas déjà placée. */
+  protected onWebcamChange(): void {
+    const OPTION = this.webcamOptions.find(
+      (o) => o.device.id === this.selectedWebcamId
+    );
+    if (!OPTION) {
+      this.scene.webcam = null;
+      return;
+    }
+    const WIDTH = this.scene.webcam?.width ?? 480;
+    const HEIGHT = this.scene.webcam?.height ?? 270;
+    this.scene.webcam = {
+      id: OPTION.device.id,
+      name: OPTION.device.name,
+      x: this.scene.webcam?.x ?? SCENE_WIDTH - WIDTH - 20,
+      y: this.scene.webcam?.y ?? SCENE_HEIGHT - HEIGHT - 20,
+      width: WIDTH,
+      height: HEIGHT
+    };
+  }
+
+  /** Image choisie : posée en haut à gauche, à sa taille réelle si elle tient. */
+  protected addSceneImage(): void {
+    window.electronAPI.arenaSceneAddImage().then((image) => {
+      if (!image) {
+        return;
+      }
+      this.ngZone.run(() => {
+        const RATIO = Math.min(
+          1,
+          (SCENE_WIDTH - 40) / image.width,
+          (SCENE_HEIGHT - 40) / image.height
+        );
+        this.sceneImageUrls[image.file] = image.url;
+        this.scene.images.push({
+          file: image.file,
+          x: 20,
+          y: 20,
+          width: Math.round(image.width * RATIO),
+          height: Math.round(image.height * RATIO)
+        });
+      });
+    });
+  }
+
+  protected removeSceneImage(file: string): void {
+    this.scene.images = this.scene.images.filter((i) => i.file !== file);
+  }
+
+  protected startSceneDrag(
+    event: PointerEvent,
+    item: ArenaSceneItem,
+    mode: 'move' | 'resize'
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
+    this.sceneDrag = {
+      item,
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: { ...item }
+    };
+  }
+
+  /** Déplace ou redimensionne (proportions conservées), sans sortir du cadre. */
+  protected onSceneDrag(event: PointerEvent): void {
+    if (!this.sceneDrag || !this.sceneStage) {
+      return;
+    }
+    const { item, mode, origin } = this.sceneDrag;
+    const SCALE =
+      SCENE_WIDTH / this.sceneStage.nativeElement.getBoundingClientRect().width;
+    const DX = (event.clientX - this.sceneDrag.startX) * SCALE;
+    const DY = (event.clientY - this.sceneDrag.startY) * SCALE;
+    const CLAMP = (n: number, min: number, max: number): number =>
+      Math.round(Math.min(Math.max(n, min), max));
+    if (mode === 'move') {
+      item.x = CLAMP(origin.x + DX, 0, SCENE_WIDTH - item.width);
+      item.y = CLAMP(origin.y + DY, 0, SCENE_HEIGHT - item.height);
+      return;
+    }
+    const RATIO = origin.width / origin.height;
+    const MAX_WIDTH = Math.min(
+      SCENE_WIDTH - origin.x,
+      (SCENE_HEIGHT - origin.y) * RATIO
+    );
+    item.width = CLAMP(origin.width + DX, SCENE_MIN_WIDTH, MAX_WIDTH);
+    item.height = Math.round(item.width / RATIO);
+  }
+
+  protected endSceneDrag(): void {
+    this.sceneDrag = undefined;
+  }
+
+  protected cancelScene(): void {
+    this.scene = JSON.parse(this.savedScene);
+    this.selectedWebcamId = this.scene.webcam?.id ?? '';
+  }
+
+  /** Enregistre la scène ; une captation en cours est relancée dessus. */
+  protected applyScene(): void {
+    window.electronAPI
+      .arenaSceneSet(this.scene)
+      .then((status: ArenaCaptureStatus) => {
+        this.ngZone.run(() => {
+          this.captureStatus = status;
+          this.toastrService.success(
+            this.translateService.instant('view.arena_mode.scene.applied')
+          );
+          // Relecture : le main process arrondit et borne les positions.
+          this.loadScene();
+        });
+      });
+  }
+
+  //#endregion
 
   /** Ouvre le dossier de travail du mode salle (spool/, work/, games/). */
   protected openFolder(): void {

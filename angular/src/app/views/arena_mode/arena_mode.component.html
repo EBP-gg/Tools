@@ -5,250 +5,366 @@ See LICENSE for terms. Unauthorized use is prohibited.
 -->
 
 <ebp-container>
-  <ebp-row>
-    <ebp-column></ebp-column>
-    <ebp-column [xs]="7">
-      @if (state) {
-        @if (state.registered) {
-          <!-- Captation : source vidéo (caméra virtuelle) → segments spool -->
-          <div class="box">
-            <div class="d-flex">
-              <mat-form-field class="mr-1">
-                <mat-label>{{
-                  'view.arena_mode.capture.device' | translate
-                }}</mat-label>
-                <mat-select
-                  [(ngModel)]="selectedDeviceId"
-                  [ngModelOptions]="{ standalone: true }"
-                  (selectionChange)="applyDevice()"
+  @if (state) {
+    @if (state.registered) {
+      <!-- Captation : source vidéo (caméra virtuelle) → segments spool -->
+      <div class="box">
+        <div class="d-flex">
+          <mat-form-field class="mr-1">
+            <mat-label>{{
+              'view.arena_mode.capture.device' | translate
+            }}</mat-label>
+            <mat-select
+              [(ngModel)]="selectedDeviceId"
+              [ngModelOptions]="{ standalone: true }"
+              (selectionChange)="applyDevice()"
+            >
+              @if (screenDevices.length) {
+                <mat-optgroup
+                  [label]="'view.arena_mode.capture.screens' | translate"
                 >
-                  @if (screenDevices.length) {
-                    <mat-optgroup
-                      [label]="'view.arena_mode.capture.screens' | translate"
-                    >
-                      @for (device of screenDevices; track device.id) {
-                        <mat-option [value]="device.id">{{
-                          device.name
-                        }}</mat-option>
-                      }
-                    </mat-optgroup>
-                  }
-                  @if (cameraDevices.length) {
-                    <mat-optgroup
-                      [label]="'view.arena_mode.capture.cameras' | translate"
-                    >
-                      @for (device of cameraDevices; track device.id) {
-                        <mat-option [value]="device.id">{{
-                          device.name
-                        }}</mat-option>
-                      }
-                    </mat-optgroup>
-                  }
-                </mat-select>
-              </mat-form-field>
-              <button
-                type="button"
-                class="squared mr-1"
-                (click)="refreshDevices()"
-                matTooltip="{{
-                  'view.arena_mode.capture.refresh' | translate
-                }}"
-              >
-                <i class="fa-sharp fa-solid fa-arrows-rotate"></i>
-              </button>
-              <button
-                type="button"
-                class="squared mr-1"
-                (click)="openFolder()"
-                matTooltip="{{
-                  'view.arena_mode.capture.openFolder' | translate
-                }}"
-              >
-                <i class="fa-sharp fa-solid fa-folder-open"></i>
-              </button>
-              <button
-                type="button"
-                class="squared mr-1"
-                (click)="openLogsFolder()"
-                matTooltip="{{
-                  'view.arena_mode.capture.openLogsFolder' | translate
-                }}"
-              >
-                <i class="fa-sharp fa-solid fa-file-lines"></i>
-              </button>
-              <button
-                type="button"
-                class="squared"
-                [disabled]="captureStatus?.running"
-                (click)="moveFolder()"
-                matTooltip="{{
-                  (captureStatus?.running
-                    ? 'view.arena_mode.capture.moveFolderStopFirst'
-                    : 'view.arena_mode.capture.moveFolder'
-                  ) | translate
-                }}"
-              >
-                <i class="fa-sharp fa-solid fa-folder-tree"></i>
-              </button>
-            </div>
-            @if (captureStatus) {
-              @if (captureStatus.deviceKind === 'screen') {
-                <!-- Aperçu d'un écran : l'image vient de ddagrab, exactement
-                     comme l'enregistrement. Fixe, rafraîchie avec la liste. -->
-                @if (captureStatus.deviceThumbnail) {
-                  <img class="preview" [src]="captureStatus.deviceThumbnail" />
-                }
-              } @else if (captureStatus.deviceId) {
-                <video
-                  #previewVideo
-                  class="preview"
-                  autoplay
-                  muted
-                  playsinline
-                ></video>
-              }
-              <!-- Niveau du son du PC : l'aperçu image ne dit pas si la
-                   source produit du son, et une scène muette passerait
-                   inaperçue jusqu'à la relecture de la vidéo. -->
-              <div class="audio">
-                <span class="audio-label">{{
-                  'view.arena_mode.capture.audio.level' | translate
-                }}</span>
-                <div class="audio-track">
-                  <div #audioMeter class="audio-meter"></div>
-                </div>
-                @if (audioTarget) {
-                  <span class="audio-target">{{ audioTarget }}</span>
-                }
-              </div>
-              @if (captureStatus.running && !captureStatus.videoStarted) {
-                <ebp-message>
-                  {{ 'view.arena_mode.capture.waitingFrame' | translate }}
-                </ebp-message>
-              }
-              @if (captureStatus.running && !captureStatus.audio.connected) {
-                <ebp-message state="error">
-                  {{ 'view.arena_mode.capture.audio.notPiped' | translate }}
-                </ebp-message>
-              }
-              @if (audioState === 'silent') {
-                <ebp-message state="error">
-                  {{ 'view.arena_mode.capture.audio.silent' | translate }}
-                </ebp-message>
-              } @else if (audioState === 'idle') {
-                <ebp-message>
-                  {{ 'view.arena_mode.capture.audio.idle' | translate }}
-                </ebp-message>
-              } @else if (audioState === 'unavailable') {
-                <ebp-message>
-                  {{ 'view.arena_mode.capture.audio.unavailable' | translate }}
-                </ebp-message>
-              }
-              @if (captureStatus.running) {
-                <ebp-message state="success">
-                  {{
-                    'view.arena_mode.capture.recording'
-                      | translate: { device: captureStatus.deviceName }
-                  }}
-                </ebp-message>
-              } @else if (captureStatus.lastError) {
-                <ebp-message state="error">
-                  {{ 'view.arena_mode.capture.error' | translate }}
-                  <code>{{ captureStatus.lastError }}</code>
-                </ebp-message>
-              } @else {
-                <ebp-message>
-                  {{ 'view.arena_mode.capture.stopped' | translate }}
-                </ebp-message>
-              }
-              <button
-                type="button"
-                class="w-100"
-                [class.red]="captureStatus.running"
-                [class.green]="!captureStatus.running"
-                [disabled]="!captureStatus.deviceId || capturePending"
-                (click)="toggleCapture()"
-              >
-                {{
-                  (captureStatus.running
-                    ? 'view.arena_mode.capture.stop'
-                    : 'view.arena_mode.capture.start'
-                  ) | translate
-                }}
-              </button>
-            }
-          </div>
-          <div class="box mt-2">
-            <button type="button" class="w-100 red" (click)="unregister()">
-              {{ 'common.logout' | translate }}
-            </button>
-          </div>
-        } @else {
-          <ebp-message
-            class="mb-2"
-            [html]="'view.arena_mode.intro' | translate"
-          ></ebp-message>
-          <div class="box">
-            <form (submit)="register()">
-              <mat-form-field>
-                <mat-label>{{
-                  'view.arena_mode.roomId' | translate
-                }}</mat-label>
-                <mat-select
-                  [(ngModel)]="roomId"
-                  [ngModelOptions]="{ standalone: true }"
-                  (selectionChange)="onRoomChange()"
-                >
-                  @for (location of locations; track location.id) {
-                    <mat-option [value]="+location.id"
-                      >{{ location.country }} — {{ location.name }}</mat-option
-                    >
-                  }
-                </mat-select>
-              </mat-form-field>
-              <mat-form-field>
-                <mat-label>{{
-                  'view.arena_mode.arenaId' | translate
-                }}</mat-label>
-                <mat-select
-                  [(ngModel)]="arenaId"
-                  [ngModelOptions]="{ standalone: true }"
-                  [disabled]="!selectedLocation || arenaLocked"
-                >
-                  @for (
-                    terrain of selectedLocation?.terrains ?? [];
-                    track terrain.id
-                  ) {
-                    <mat-option [value]="+terrain.id">{{
-                      terrain.name
+                  @for (device of screenDevices; track device.id) {
+                    <mat-option [value]="device.id">{{
+                      device.name
                     }}</mat-option>
                   }
-                </mat-select>
-              </mat-form-field>
-              <mat-form-field>
-                <mat-label>{{ 'view.arena_mode.key' | translate }}</mat-label>
-                <input
-                  matInput
-                  type="password"
-                  [ngModelOptions]="{ standalone: true }"
-                  [(ngModel)]="key"
-                />
-              </mat-form-field>
-              <button
-                [disabled]="!roomId || !arenaId || !key || registering"
-                type="submit"
-                class="w-100 mt-1 green"
-              >
-                @if (registering) {
-                  <i class="fa-sharp fa-solid fa-spinner fa-spin"></i>
-                } @else {
-                  {{ 'view.arena_mode.register' | translate }}
-                }
-              </button>
-            </form>
+                </mat-optgroup>
+              }
+              @if (cameraDevices.length) {
+                <mat-optgroup
+                  [label]="'view.arena_mode.capture.cameras' | translate"
+                >
+                  @for (device of cameraDevices; track device.id) {
+                    <mat-option [value]="device.id">{{
+                      device.name
+                    }}</mat-option>
+                  }
+                </mat-optgroup>
+              }
+            </mat-select>
+          </mat-form-field>
+          <button
+            type="button"
+            class="squared mr-1"
+            (click)="refreshDevices()"
+            matTooltip="{{
+              'view.arena_mode.capture.refresh' | translate
+            }}"
+          >
+            <i class="fa-sharp fa-solid fa-arrows-rotate"></i>
+          </button>
+          <button
+            type="button"
+            class="squared mr-1"
+            (click)="openFolder()"
+            matTooltip="{{
+              'view.arena_mode.capture.openFolder' | translate
+            }}"
+          >
+            <i class="fa-sharp fa-solid fa-folder-open"></i>
+          </button>
+          <button
+            type="button"
+            class="squared mr-1"
+            (click)="openLogsFolder()"
+            matTooltip="{{
+              'view.arena_mode.capture.openLogsFolder' | translate
+            }}"
+          >
+            <i class="fa-sharp fa-solid fa-file-lines"></i>
+          </button>
+          <button
+            type="button"
+            class="squared"
+            [disabled]="captureStatus?.running"
+            (click)="moveFolder()"
+            matTooltip="{{
+              (captureStatus?.running
+                ? 'view.arena_mode.capture.moveFolderStopFirst'
+                : 'view.arena_mode.capture.moveFolder'
+              ) | translate
+            }}"
+          >
+            <i class="fa-sharp fa-solid fa-folder-tree"></i>
+          </button>
+        </div>
+        @if (captureStatus) {
+          @if (captureStatus.deviceKind === 'screen') {
+            <!-- Aperçu d'un écran : l'image vient de ddagrab, exactement
+                  comme l'enregistrement. Fixe, rafraîchie avec la liste. -->
+            @if (captureStatus.deviceThumbnail) {
+              <img class="preview" [src]="captureStatus.deviceThumbnail" />
+            }
+          } @else if (captureStatus.deviceKind === 'camera') {
+            <video
+              #previewVideo
+              class="preview"
+              autoplay
+              muted
+              playsinline
+            ></video>
+          }
+          <!-- Niveau du son du PC : l'aperçu image ne dit pas si la
+                source produit du son, et une scène muette passerait
+                inaperçue jusqu'à la relecture de la vidéo. -->
+          <div class="audio">
+            <span class="audio-label">{{
+              'view.arena_mode.capture.audio.level' | translate
+            }}</span>
+            <div class="audio-track">
+              <div #audioMeter class="audio-meter"></div>
+            </div>
+            @if (audioTarget) {
+              <span class="audio-target">{{ audioTarget }}</span>
+            }
           </div>
+          @if (captureStatus.waitingGame) {
+            <ebp-message>
+              {{ 'view.arena_mode.capture.waitingGame' | translate }}
+            </ebp-message>
+          } @else if (captureStatus.running && !captureStatus.videoStarted) {
+            <ebp-message>
+              {{ 'view.arena_mode.capture.waitingFrame' | translate }}
+            </ebp-message>
+          }
+          @if (captureStatus.running && !captureStatus.audio.connected) {
+            <ebp-message state="error">
+              {{ 'view.arena_mode.capture.audio.notPiped' | translate }}
+            </ebp-message>
+          }
+          @if (audioState === 'silent') {
+            <ebp-message state="error">
+              {{ 'view.arena_mode.capture.audio.silent' | translate }}
+            </ebp-message>
+          } @else if (audioState === 'idle') {
+            <ebp-message>
+              {{ 'view.arena_mode.capture.audio.idle' | translate }}
+            </ebp-message>
+          } @else if (audioState === 'unavailable') {
+            <ebp-message>
+              {{ 'view.arena_mode.capture.audio.unavailable' | translate }}
+            </ebp-message>
+          }
+          @if (captureStatus.running && !captureStatus.waitingGame) {
+            <ebp-message state="success">
+              {{
+                'view.arena_mode.capture.recording'
+                  | translate: { device: captureStatus.deviceName }
+              }}
+            </ebp-message>
+          } @else if (captureStatus.waitingGame) {
+            <!-- Attente du jeu : message déjà affiché plus haut. -->
+          } @else if (captureStatus.lastError) {
+            <ebp-message state="error">
+              {{ 'view.arena_mode.capture.error' | translate }}
+              <code>{{ captureStatus.lastError }}</code>
+            </ebp-message>
+          } @else {
+            <ebp-message>
+              {{ 'view.arena_mode.capture.stopped' | translate }}
+            </ebp-message>
+          }
+          <button
+            type="button"
+            class="w-100"
+            [class.red]="captureStatus.running"
+            [class.green]="!captureStatus.running"
+            [disabled]="!captureStatus.deviceId || capturePending"
+            (click)="toggleCapture()"
+          >
+            {{
+              (captureStatus.running
+                ? 'view.arena_mode.capture.stop'
+                : 'view.arena_mode.capture.start'
+              ) | translate
+            }}
+          </button>
         }
+      </div>
+      <!-- Tools Virtual Scene : la fenêtre du jeu en plein cadre, webcam et
+            images par-dessus. Assemblée par ffmpeg, donc enregistrée telle
+            quelle. N'existe que si cette source est choisie. -->
+      @if (captureStatus?.deviceKind === 'scene') {
+        <div class="box mt-2">
+          <div class="d-flex">
+            <mat-form-field class="mr-1">
+              <mat-label>{{
+                'view.arena_mode.scene.webcam' | translate
+              }}</mat-label>
+              <mat-select
+                [(ngModel)]="selectedWebcamId"
+                [ngModelOptions]="{ standalone: true }"
+                (selectionChange)="onWebcamChange()"
+              >
+                <mat-option value="">{{
+                  'view.arena_mode.scene.noWebcam' | translate
+                }}</mat-option>
+                @for (option of webcamOptions; track option.device.id) {
+                  <mat-option [value]="option.device.id">{{
+                    option.label
+                  }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+            <button
+              type="button"
+              class="squared"
+              (click)="addSceneImage()"
+              matTooltip="{{ 'view.arena_mode.scene.addImage' | translate }}"
+            >
+              <i class="fa-sharp fa-solid fa-image"></i>
+            </button>
+          </div>
+          <div
+            #sceneStage
+            class="scene-stage"
+            (pointermove)="onSceneDrag($event)"
+            (pointerup)="endSceneDrag()"
+            (pointercancel)="endSceneDrag()"
+          >
+            @if (sceneBackground) {
+              <img class="scene-background" [src]="sceneBackground" />
+            }
+            @if (scene.webcam) {
+              <div
+                class="scene-item scene-webcam"
+                [style.left.%]="(scene.webcam.x / 1920) * 100"
+                [style.top.%]="(scene.webcam.y / 1080) * 100"
+                [style.width.%]="(scene.webcam.width / 1920) * 100"
+                [style.height.%]="(scene.webcam.height / 1080) * 100"
+                (pointerdown)="startSceneDrag($event, scene.webcam, 'move')"
+              >
+                <i class="fa-sharp fa-solid fa-video"></i>
+                <span
+                  class="scene-handle"
+                  (pointerdown)="startSceneDrag($event, scene.webcam, 'resize')"
+                ></span>
+              </div>
+            }
+            @for (image of scene.images; track image.file) {
+              <div
+                class="scene-item"
+                [style.left.%]="(image.x / 1920) * 100"
+                [style.top.%]="(image.y / 1080) * 100"
+                [style.width.%]="(image.width / 1920) * 100"
+                [style.height.%]="(image.height / 1080) * 100"
+                (pointerdown)="startSceneDrag($event, image, 'move')"
+              >
+                <img [src]="sceneImageUrls[image.file]" draggable="false" />
+                <span
+                  class="scene-remove"
+                  (pointerdown)="$event.stopPropagation()"
+                  (click)="removeSceneImage(image.file)"
+                  matTooltip="{{
+                    'view.arena_mode.scene.removeImage' | translate
+                  }}"
+                >
+                  <i class="fa-sharp fa-solid fa-xmark"></i>
+                </span>
+                <span
+                  class="scene-handle"
+                  (pointerdown)="startSceneDrag($event, image, 'resize')"
+                ></span>
+              </div>
+            }
+          </div>
+          <ebp-message>
+            {{ 'view.arena_mode.scene.help' | translate }}
+          </ebp-message>
+          @if (captureStatus?.webcamSuspended) {
+            <ebp-message state="error">
+              {{ 'view.arena_mode.scene.webcamSuspended' | translate }}
+            </ebp-message>
+          }
+          <div class="d-flex">
+            <button
+              type="button"
+              class="w-100 mr-1"
+              [disabled]="!sceneDirty"
+              (click)="cancelScene()"
+            >
+              {{ 'view.arena_mode.scene.cancel' | translate }}
+            </button>
+            <button
+              type="button"
+              class="w-100 green"
+              [disabled]="!sceneDirty"
+              (click)="applyScene()"
+            >
+              {{ 'view.arena_mode.scene.apply' | translate }}
+            </button>
+          </div>
+        </div>
       }
-    </ebp-column>
-  </ebp-row>
+      <div class="box mt-2">
+        <button type="button" class="w-100 red" (click)="unregister()">
+          {{ 'common.logout' | translate }}
+        </button>
+      </div>
+    } @else {
+      <ebp-message
+        class="mb-2"
+        [html]="'view.arena_mode.intro' | translate"
+      ></ebp-message>
+      <div class="box">
+        <form (submit)="register()">
+          <mat-form-field>
+            <mat-label>{{
+              'view.arena_mode.roomId' | translate
+            }}</mat-label>
+            <mat-select
+              [(ngModel)]="roomId"
+              [ngModelOptions]="{ standalone: true }"
+              (selectionChange)="onRoomChange()"
+            >
+              @for (location of locations; track location.id) {
+                <mat-option [value]="+location.id"
+                  >{{ location.country }} — {{ location.name }}</mat-option
+                >
+              }
+            </mat-select>
+          </mat-form-field>
+          <mat-form-field>
+            <mat-label>{{
+              'view.arena_mode.arenaId' | translate
+            }}</mat-label>
+            <mat-select
+              [(ngModel)]="arenaId"
+              [ngModelOptions]="{ standalone: true }"
+              [disabled]="!selectedLocation || arenaLocked"
+            >
+              @for (
+                terrain of selectedLocation?.terrains ?? [];
+                track terrain.id
+              ) {
+                <mat-option [value]="+terrain.id">{{
+                  terrain.name
+                }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+          <mat-form-field>
+            <mat-label>{{ 'view.arena_mode.key' | translate }}</mat-label>
+            <input
+              matInput
+              type="password"
+              [ngModelOptions]="{ standalone: true }"
+              [(ngModel)]="key"
+            />
+          </mat-form-field>
+          <button
+            [disabled]="!roomId || !arenaId || !key || registering"
+            type="submit"
+            class="w-100 mt-1 green"
+          >
+            @if (registering) {
+              <i class="fa-sharp fa-solid fa-spinner fa-spin"></i>
+            } @else {
+              {{ 'view.arena_mode.register' | translate }}
+            }
+          </button>
+        </form>
+      </div>
+    }
+  }
 </ebp-container>

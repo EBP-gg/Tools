@@ -163,6 +163,7 @@
       "capture": {
         "device": "Fonte de vídeo",
         "waitingFrame": "A aguardar a primeira imagem da fonte. A gravação começa assim que chegar: se esta mensagem persistir, a fonte não produz qualquer imagem.",
+        "waitingGame": "À espera do jogo: a gravação começa assim que After-H ou Color Chaos estiver aberto.",
         "screens": "Ecrãs",
         "cameras": "Câmaras virtuais",
         "refresh": "Atualizar a lista",
@@ -182,6 +183,17 @@
           "unavailable": "O nível sonoro não pode ser medido neste sistema.",
           "notPiped": "O som está a ser captado, mas não chega à gravação: o ffmpeg não abriu o canal de áudio. Os vídeos desta captação ficarão mudos."
         }
+      },
+      "scene": {
+        "webcam": "Webcam",
+        "noWebcam": "Nenhuma",
+        "addImage": "Adicionar uma imagem",
+        "removeImage": "Remover a imagem",
+        "help": "O jogo (After-H ou Color Chaos) é captado pela sua janela e ocupa todo o quadro; a sua imagem aparece aqui durante a gravação. Arraste a webcam e as imagens para as mover, redimensione-as pelo canto inferior direito e depois aplique.",
+        "webcamSuspended": "A webcam está indisponível: a gravação continua sem ela e será reintegrada assim que reaparecer.",
+        "cancel": "Cancelar",
+        "apply": "Aplicar",
+        "applied": "Cena aplicada"
       }
     }
   },

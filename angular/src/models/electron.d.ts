@@ -63,7 +63,11 @@ export interface ArenaModeState {
 export interface ArenaCaptureDevice {
   id: string;
   name: string;
-  kind: 'screen' | 'camera';
+  /**
+   * `scene` : Tools Virtual Scene (fenêtre du jeu + webcam + images).
+   * `webcam` : caméra posable dans la scène, physique ou virtuelle.
+   */
+  kind: 'screen' | 'camera' | 'scene' | 'webcam';
   /** Écrans Windows uniquement : adaptateur et sortie DXGI pour ddagrab. */
   adapter?: number;
   outputIndex?: number;
@@ -71,6 +75,34 @@ export interface ArenaCaptureDevice {
   thumbnail?: string | null;
   width?: number;
   height?: number;
+}
+
+/** Élément posé sur le jeu, en pixels du cadre 1920×1080. */
+export interface ArenaSceneItem {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ArenaSceneWebcam extends ArenaSceneItem {
+  id: string;
+  name: string;
+}
+
+export interface ArenaSceneImage extends ArenaSceneItem {
+  /** Nom du fichier dans EBP-Tools-Arena/scene/. */
+  file: string;
+}
+
+export interface ArenaScene {
+  webcam: ArenaSceneWebcam | null;
+  images: ArenaSceneImage[];
+}
+
+/** Scène + vignette de chaque image, par nom de fichier. */
+export interface ArenaSceneView extends ArenaScene {
+  imageUrls: Record<string, string>;
 }
 
 /** Niveau du son réellement enregistré, sondé chaque seconde par le VU-mètre. */
@@ -87,7 +119,7 @@ export interface ArenaCaptureStatus {
   running: boolean;
   deviceId: string | null;
   deviceName: string | null;
-  deviceKind: 'screen' | 'camera' | null;
+  deviceKind: 'screen' | 'camera' | 'scene' | null;
   deviceThumbnail: string | null;
   encoder: string | null;
   startedAt: number | null;
@@ -96,6 +128,10 @@ export interface ArenaCaptureStatus {
   segmentSeconds: number;
   /** Faux tant que ddagrab n'a produit aucune image : rien n'est enregistré. */
   videoStarted: boolean;
+  /** Webcam de la scène écartée après une panne : enregistrement sans elle. */
+  webcamSuspended: boolean;
+  /** Scène armée, en attente de la fenêtre du jeu : rien n'est enregistré. */
+  waitingGame: boolean;
   audio: {
     running: boolean;
     connected: boolean;
@@ -194,6 +230,15 @@ export interface ElectronAPI {
   ) => Promise<ArenaCaptureStatus>;
   arenaCaptureStart: () => Promise<ArenaCaptureStatus>;
   arenaCaptureStop: () => Promise<ArenaCaptureStatus>;
+  arenaCaptureGetPreview: () => Promise<string | null>;
+  arenaSceneGet: () => Promise<ArenaSceneView>;
+  arenaSceneSet: (scene: ArenaScene) => Promise<ArenaCaptureStatus>;
+  arenaSceneAddImage: () => Promise<{
+    file: string;
+    width: number;
+    height: number;
+    url: string;
+  } | null>;
   arenaAudioGetLevel: () => Promise<ArenaAudioLevel>;
   arenaOpenFolder: () => Promise<void>;
   arenaOpenLogsFolder: () => Promise<void>;

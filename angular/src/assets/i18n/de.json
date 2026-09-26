@@ -163,6 +163,7 @@
       "capture": {
         "device": "Videoquelle",
         "waitingFrame": "Warten auf das erste Bild der Quelle. Die Aufzeichnung beginnt, sobald es eintrifft: Bleibt diese Meldung bestehen, liefert die Quelle kein Bild.",
+        "waitingGame": "Warten auf das Spiel: Die Aufnahme startet, sobald After-H oder Color Chaos geöffnet ist.",
         "screens": "Bildschirme",
         "cameras": "Virtuelle Kameras",
         "refresh": "Liste aktualisieren",
@@ -182,6 +183,17 @@
           "unavailable": "Der Tonpegel kann auf diesem System nicht gemessen werden.",
           "notPiped": "Der Ton wird erfasst, erreicht aber die Aufnahme nicht: ffmpeg hat den Audiokanal nicht geöffnet. Die Videos dieser Aufnahme bleiben stumm."
         }
+      },
+      "scene": {
+        "webcam": "Webcam",
+        "noWebcam": "Keine",
+        "addImage": "Bild hinzufügen",
+        "removeImage": "Bild entfernen",
+        "help": "Das Spiel (After-H oder Color Chaos) wird über sein Fenster aufgenommen und füllt den gesamten Rahmen; sein Bild erscheint hier während der Aufnahme. Verschieben Sie Webcam und Bilder per Ziehen, ändern Sie ihre Größe an der unteren rechten Ecke und wenden Sie dann an.",
+        "webcamSuspended": "Die Webcam ist nicht verfügbar: Die Aufnahme läuft ohne sie weiter, und sie wird wieder eingebunden, sobald sie wieder erscheint.",
+        "cancel": "Abbrechen",
+        "apply": "Anwenden",
+        "applied": "Szene angewendet"
       }
     }
   },

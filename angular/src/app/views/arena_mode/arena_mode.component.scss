@@ -60,3 +60,69 @@ form {
   border: 1px solid variables.$border_color;
   box-sizing: border-box;
 }
+
+// Éditeur de scène : le cadre 1920×1080, et les éléments posés dessus en %.
+.scene-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background-color: black;
+  border: 1px solid variables.$border_color;
+  box-sizing: border-box;
+  overflow: hidden;
+  // Le glisser ne doit ni défiler la page ni sélectionner de texte.
+  touch-action: none;
+  user-select: none;
+}
+
+// Image enregistrée : elle contient déjà la scène APPLIQUÉE, d'où l'atténuation
+// qui fait ressortir les éléments en cours d'édition.
+.scene-background {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.scene-item {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed variables.$main_color;
+  cursor: move;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  img {
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+}
+
+.scene-webcam {
+  background-color: rgba(0, 0, 0, 0.5);
+  color: variables.$main_color;
+}
+
+.scene-handle {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  background-color: variables.$main_color;
+  cursor: nwse-resize;
+}
+
+.scene-remove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0 4px;
+  background-color: variables.$main_color;
+  color: black;
+  cursor: pointer;
+}

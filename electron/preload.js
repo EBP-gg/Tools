@@ -76,6 +76,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // The front-end asks the server to start/stop the arena capture.
   arenaCaptureStart: () => ipcRenderer.invoke("arena-capture-start"),
   arenaCaptureStop: () => ipcRenderer.invoke("arena-capture-stop"),
+  // The front-end polls the image actually recorded (scene included).
+  arenaCaptureGetPreview: () => ipcRenderer.invoke("arena-capture-preview"),
+  // The front-end reads, saves and fills the capture scene (webcam + images).
+  arenaSceneGet: () => ipcRenderer.invoke("arena-scene-get"),
+  arenaSceneSet: (scene) => ipcRenderer.invoke("arena-scene-set", scene),
+  arenaSceneAddImage: () => ipcRenderer.invoke("arena-scene-add-image"),
   // The front-end polls the recorded audio level for the VU meter.
   arenaAudioGetLevel: () => ipcRenderer.invoke("arena-audio-level"),
   // The front-end asks the server to open the arena working folder in the explorer.

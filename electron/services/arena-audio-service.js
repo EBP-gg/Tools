@@ -215,6 +215,16 @@ function pickTarget(apps) {
 }
 
 /**
+ * Jeu ciblé actuellement ouvert, s'il y en a un. Sert aussi à la captation
+ * vidéo de la scène, qui filme la fenêtre de ce même jeu.
+ * @returns {Promise<{pid: number, exe: string}|null>}
+ */
+async function findTarget() {
+    if (!sourceSupported()) return null;
+    return pickTarget(await listApps());
+}
+
+/**
  * Lance le helper sur un processus et branche sa sortie sur le tube.
  * @param {{pid: number, exe: string}} target
  */
@@ -510,6 +520,8 @@ function getStatus() {
 }
 
 module.exports = {
+    TARGET_EXECUTABLES,
+    findTarget,
     start,
     stop,
     getPipePath,

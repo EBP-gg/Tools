@@ -163,6 +163,7 @@
       "capture": {
         "device": "Sursă video",
         "waitingFrame": "Se așteaptă prima imagine de la sursă. Înregistrarea începe imediat ce sosește: dacă acest mesaj persistă, sursa nu produce nicio imagine.",
+        "waitingGame": "Se așteaptă jocul: înregistrarea va începe imediat ce After-H sau Color Chaos este deschis.",
         "screens": "Ecrane",
         "cameras": "Camere virtuale",
         "refresh": "Reîmprospătează lista",
@@ -182,6 +183,17 @@
           "unavailable": "Nivelul sonor nu poate fi măsurat pe acest sistem.",
           "notPiped": "Sunetul este captat, dar nu ajunge la înregistrare: ffmpeg nu a deschis canalul audio. Videoclipurile acestei capturi vor fi mute."
         }
+      },
+      "scene": {
+        "webcam": "Webcam",
+        "noWebcam": "Niciuna",
+        "addImage": "Adaugă o imagine",
+        "removeImage": "Elimină imaginea",
+        "help": "Jocul (After-H sau Color Chaos) este capturat din fereastra sa și ocupă tot cadrul; imaginea lui apare aici în timpul înregistrării. Trageți webcam-ul și imaginile pentru a le muta, redimensionați-le din colțul din dreapta jos, apoi aplicați.",
+        "webcamSuspended": "Webcam-ul este indisponibil: înregistrarea continuă fără el și va fi reintegrat imediat ce reapare.",
+        "cancel": "Anulează",
+        "apply": "Aplică",
+        "applied": "Scenă aplicată"
       }
     }
   },
