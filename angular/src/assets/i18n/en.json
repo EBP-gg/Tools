@@ -185,8 +185,8 @@
         }
       },
       "scene": {
-        "webcam": "Webcam",
         "noWebcam": "None",
+        "chooseWebcam": "Choose the webcam",
         "addImage": "Add an image",
         "removeImage": "Remove the image",
         "help": "The game (After-H or Color Chaos) is captured from its window and fills the whole frame; its image appears here while recording. Drag the webcam and images to move them, resize them from their bottom-right corner, then apply.",

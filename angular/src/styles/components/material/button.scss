@@ -2,208 +2,339 @@
 // This file is part of a source-visible project.
 // See LICENSE for terms. Unauthorized use is prohibited.
 
+@use "sass:string";
 @use '../../imports/variables' as variables;
 @use '../../imports/material_colors' as material_colors;
 
 $button_decoration_position: 5px;
 $button_decoration_width: 2px;
 
+// Largeur logique du mode salon (letterbox 1920×1080).
+$letterbox_width: 120rem;
+
+// Un identifiant CSS ne peut pas commencer par un chiffre : `2xl` s'écrit `\32 xl` (échappement
+// hexadécimal du chiffre, suivi d'un espace qui termine la séquence). Tailwind fait de même.
+@function escape-leading-digit($name) {
+	$first: string.slice($name, 1, 1);
+
+	@if string.index("0123456789", $first) {
+		@return "\\3" + $first + " " + string.slice($name, 2);
+	}
+
+	@return $name;
+}
+
+@mixin squared {
+	max-width: variables.$form_height;
+	max-height: variables.$form_height;
+	text-align: center;
+
+	// Neutralise le padding / la taille de police de la branche `:not(.squared)`, qui reste
+	// appliquée quand seule une variante responsive (`md:squared`) est présente. Les deux
+	// sélecteurs sont nécessaires pour égaler la spécificité de cette branche.
+	&.big,
+	&:not(.big) {
+		padding: 0;
+		font-size: inherit;
+	}
+
+	> i {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: 100%;
+		width: 100%;
+
+		&:before {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+		}
+	}
+}
+
 button,
 .btn {
-  &:not(.default) {
-    text-align: center;
-    $border_color: variables.$border_color;
-    min-height: variables.$form_height;
-    min-width: variables.$form_height;
-    border: 1px solid $border_color;
-    color: white;
-    position: relative;
-    text-transform: uppercase;
-    background-color: variables.$dark_color;
-    background-position: center center;
-    background-repeat: no-repeat;
-    display: block;
-    text-decoration: none;
-    width: fit-content;
-    line-height: calc(#{variables.$form_height} - 1px * 2);
-    box-sizing: border-box;
+	&:not(.default) {
+		text-align: center;
+		$border_color: variables.$border_color;
+		min-height: variables.$form_height;
+		min-width: variables.$form_height;
+		border: 1px solid $border_color;
+		color: white;
+		position: relative;
+		text-transform: uppercase;
+		background-color: variables.$dark_color;
+		background-position: center center;
+		background-repeat: no-repeat;
+		display: flex;
+		text-decoration: none;
+		line-height: calc(#{variables.$form_height} - 1px * 2);
+		box-sizing: border-box;
+		border-radius: variables.$spacing;
+		justify-content: center;
+		// Le centrage vertical reposait sur le seul `line-height` : dès qu'un enfant porte sa
+		// propre hauteur de ligne (un `span` de libellé, une icône dimensionnée), il décrochait.
+		align-items: center;
+		transition: background-color 0.2s;
+		gap: calc(#{variables.$spacing} * 3 / 2);
+		font-weight: 700;
+		text-shadow: none;
 
-    &:not(.squared) {
-      font-family: DukeFill, sans-serif;
-      letter-spacing: calc(#{variables.$margin} * 0.3) !important;
-      font-size: calc(#{variables.$margin} * 2.2) !important;
-      padding: 0 calc(12px * 2);
+		$big_height: 44px;
+		&.big {
+			min-height: $big_height;
+			line-height: calc(#{$big_height} - 1px * 2);
+		}
 
-      > i {
-        margin-right: calc(#{variables.$margin} / 2);
-        transform: translateY(-3px);
-      }
-    }
+		&:not(.squared) {
+			&.big {
+				padding: 0 calc(#{variables.$spacing} * 4);
+				font-size: calc(#{variables.$spacing} * 4);
+			}
 
-    &.squared {
-      max-width: 36px;
-      max-height: variables.$form_height;
-      text-align: center;
-    }
+			&:not(.big) {
+				padding: 0 calc(#{variables.$spacing} * 2);
+				font-size: calc(#{variables.$spacing} * 3);
+			}
 
-    &.white {
-      border-color: material_colors.$white;
-      color: variables.$dark_color;
-      background-color: material_colors.$white;
+			> i {
+				height: calc(#{variables.$form_height} - 1px * 2);
+				position: relative;
 
-      &:not([disabled]):active {
-        color: material_colors.$white;
-        background-color: variables.$dark_color;
-      }
+				&:before {
+					position: absolute;
+					top: 50%;
+					left: 50%;
+					transform: translate(-50%, -50%);
+				}
+			}
+		}
 
-      &:not(:active) {
-        &:before,
-        &:after {
-          border-color: black;
-        }
-      }
-    }
+		&.squared {
+			@include squared;
+		}
 
-    &.green {
-      border-color: material_colors.$material_green_500;
-      color: material_colors.$material_green_500;
+		// Variantes responsive `md:squared` / `max-md:squared`, sur les breakpoints Tailwind.
+		// En mode salon l'app est contrainte dans une boîte logique de 1920px : le rendu doit être
+		// celui de 1920px quelle que soit la largeur réelle, d'où le traitement de letterbox-on.
+		@each $name, $width in variables.$tailwind_breakpoints {
+			@media (width >= $width) {
+				&.#{escape-leading-digit($name)}\:squared {
+					@include squared;
+				}
+			}
 
-      &:not([disabled]):active {
-        color: variables.$dark_color;
-        background-color: material_colors.$material_green_500;
-      }
-    }
+			@if $width <= $letterbox_width {
+				// À 1920px la variante `min` est active et la `max` ne l'est pas.
+				html.letterbox-on &.#{escape-leading-digit($name)}\:squared {
+					@include squared;
+				}
 
-    &.red {
-      border-color: material_colors.$material_red_500;
-      color: material_colors.$material_red_500;
+				@media (width < $width) {
+					html:not(.letterbox-on) &.max-#{$name}\:squared {
+						@include squared;
+					}
+				}
+			} @else {
+				// Breakpoint au-delà de 1920px : la variante `max` est active en salon.
+				@media (width < $width) {
+					&.max-#{$name}\:squared {
+						@include squared;
+					}
+				}
 
-      &:not([disabled]):active {
-        color: variables.$dark_color;
-        background-color: material_colors.$material_red_500;
-      }
-    }
+				html.letterbox-on &.max-#{$name}\:squared {
+					@include squared;
+				}
+			}
+		}
 
-    &.orange {
-      border-color: material_colors.$material_orange_500;
-      color: material_colors.$material_orange_500;
+		&.white {
+			border-color: variables.$dark_color;
+			color: variables.$dark_color;
+			background-color: material_colors.$white;
 
-      &:not([disabled]):active {
-        color: variables.$dark_color;
-        background-color: material_colors.$material_orange_500;
-      }
-    }
+			// Seule variante à fond clair : le survol se mélange vers SON fond (blanc), pas vers
+			// le noir du système — sinon `currentColor` (#0b0b0b) la ferait virer au noir.
+			@media (hover: hover) and (pointer: fine) {
+				&:hover:not(:disabled, .disabled) {
+					background-color: color-mix(in srgb, currentColor 15%, #{material_colors.$white});
+				}
+			}
 
-    &.primary {
-      border-color: variables.$main_color;
-      color: variables.$main_color;
+			&:not([disabled]):active {
+				color: material_colors.$white;
+				background-color: variables.$dark_color;
+			}
+		}
 
-      &:not([disabled]):active {
-        color: variables.$dark_color;
-        background-color: variables.$main_color;
-      }
-    }
+		&.eva {
+			border-color: variables.$eva_color;
+			color: material_colors.$white;
 
-    &.discord {
-      border-color: variables.$discord_color;
-      color: variables.$discord_color;
+			&:not([disabled]):active {
+				color: material_colors.$white;
+				background-color: variables.$eva_color;
+			}
+		}
 
-      &:not([disabled]):active {
-        color: variables.$dark_color;
-        background-color: variables.$discord_color;
-      }
-    }
+		&.green {
+			border-color: material_colors.$material_green_500;
+			color: material_colors.$material_green_500;
 
-    &:not(:disabled) {
-      cursor: pointer;
-    }
+			&:not([disabled]):active {
+				color: variables.$dark_color;
+				background-color: material_colors.$material_green_500;
+			}
+		}
 
-    &:disabled,
-    &.disabled {
-      cursor: not-allowed;
-      opacity: 0.5;
-    }
+		&.red {
+			border-color: material_colors.$material_red_500;
+			color: material_colors.$material_red_500;
 
-    &.selected {
-      background-color: variables.$main_color;
-      color: black;
-    }
+			&:not([disabled]):active {
+				color: variables.$dark_color;
+				background-color: material_colors.$material_red_500;
+			}
+		}
 
-    > .beta {
-      color: material_colors.$material_red_500;
-      border: 1px solid material_colors.$material_red_500;
-      border-radius: 1000px;
-      background-color: variables.$dark_color;
-      position: absolute;
-      top: 100%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 9px;
-      cursor: pointer;
-      z-index: 1;
-      padding: 0 3px;
-    }
+		&.blue {
+			border-color: material_colors.$material_blue_500;
+			color: material_colors.$material_blue_500;
 
-    > i {
-      font-size: 15px;
+			&:not([disabled]):active {
+				color: variables.$dark_color;
+				background-color: material_colors.$material_blue_500;
+			}
+		}
 
-      &.fa-sharp.fa-solid.fa-star {
-        $font-size: 13px;
-        position: absolute;
-        top: 0;
-        right: 0;
-        transform: translate(50%, -50%);
+		&.orange {
+			border-color: material_colors.$material_orange_500;
+			color: material_colors.$material_orange_500;
 
-        &:nth-child(1) {
-          color: variables.$main_color;
-          font-size: calc(#{$font-size} + 5px);
-        }
+			&:not([disabled]):active {
+				color: variables.$dark_color;
+				background-color: material_colors.$material_orange_500;
+			}
+		}
 
-        &:nth-child(2) {
-          color: variables.$dark_color;
-          font-size: $font-size;
-        }
-      }
-    }
+		&.primary {
+			border-color: variables.$main_color;
+			color: variables.$main_color;
 
-    > span {
-      margin-left: 12px;
-    }
+			&:not([disabled]):active {
+				color: variables.$dark_color;
+				background-color: variables.$main_color;
+			}
+		}
 
-    &:after,
-    &:before {
-      content: '';
-      position: absolute;
-      height: 7px;
-      width: 7px;
-      box-sizing: border-box;
-      border-style: solid;
-      border-color: white;
-      opacity: 0.5;
-    }
+		&.discord {
+			border-color: variables.$discord_color;
+			color: variables.$discord_color;
 
-    &:not([disabled]):active {
-      color: variables.$dark_color;
-      background-color: white;
+			&:not([disabled]):active {
+				color: variables.$dark_color;
+				background-color: variables.$discord_color;
+			}
+		}
 
-      &:not(.white) {
-        &:after,
-        &:before {
-          border-color: black;
-        }
-      }
-    }
+		&.evacoaching {
+			border-color: variables.$evacoaching_color;
+			color: variables.$evacoaching_color;
 
-    &:before {
-      top: $button_decoration_position;
-      left: $button_decoration_position;
-      border-width: $button_decoration_width 0 0 $button_decoration_width;
-    }
+			&:not([disabled]):active {
+				color: variables.$dark_color;
+				background-color: variables.$evacoaching_color;
+			}
+		}
 
-    &:after {
-      bottom: $button_decoration_position;
-      right: $button_decoration_position;
-      border-width: 0 $button_decoration_width $button_decoration_width 0;
-    }
-  }
+		&:not(:disabled) {
+			cursor: pointer;
+		}
+
+		&:disabled,
+		&.disabled {
+			cursor: not-allowed;
+			opacity: 0.5;
+		}
+
+		&.selected {
+			background-color: variables.$main_color;
+			color: black;
+
+			// Variante "wired" : seules la bordure et la police changent de couleur.
+			&.wired {
+				background-color: variables.$dark_color;
+				border-color: variables.$main_color;
+				color: variables.$main_color;
+			}
+		}
+
+		> .beta {
+			color: material_colors.$material_red_500;
+			border: 1px solid material_colors.$material_red_500;
+			border-radius: 1000px;
+			background-color: variables.$dark_color;
+			position: absolute;
+			top: 100%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			font-size: 9px;
+			cursor: pointer;
+			z-index: 1;
+			padding: 0 3px;
+		}
+
+		> i {
+			font-size: 12px;
+
+			&.fa-sharp.fa-solid.fa-star {
+				$font-size: 13px;
+				position: absolute;
+				top: 0;
+				right: 0;
+				transform: translate(50%, -50%);
+
+				&:nth-child(1) {
+					color: variables.$main_color;
+					font-size: calc(#{$font-size} + 5px);
+				}
+
+				&:nth-child(2) {
+					color: variables.$dark_color;
+					font-size: $font-size;
+				}
+			}
+		}
+
+		// Survol : le fond monte d'un palier dans l'échelle tonale du système. `currentColor`
+		// fait tenir les 8 variantes en une seule règle — au repos la couleur du texte EST celle
+		// de la variante, donc le neutre atteint pile #1f1f1f (Ardoise relevée) et chaque variante
+		// colorée reçoit un voile de sa propre teinte. Réservé au pointeur fin : sur tactile,
+		// `:hover` reste collé après le tap.
+		//
+		// Spécificité volontairement égale à celle de `:not([disabled]):active` — une liste dans
+		// `:not()` ne compte que pour son argument le plus spécifique. L'appui, déclaré après,
+		// l'emporte donc sur le survol.
+		@media (hover: hover) and (pointer: fine) {
+			&:hover:not(:disabled, .disabled, .white, .selected) {
+				background-color: variables.$dark_color_3; // repli si color-mix indisponible
+				background-color: color-mix(in srgb, currentColor 15%, #{variables.$dark_color});
+			}
+		}
+
+		// Focus clavier : l'anneau était absent, et le survol ci-dessus ne sert qu'à la souris.
+		&:focus-visible {
+			outline: 2px solid variables.$main_color;
+			outline-offset: 2px;
+		}
+
+		&:not([disabled]):active {
+			color: variables.$dark_color;
+			background-color: white;
+			transition: none; // l'appui est franc, il ne se fond pas
+		}
+	}
 }

@@ -17,6 +17,7 @@ import { GridModule } from '../../shared/grid/grid.module';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { ConnectedPosition, OverlayModule } from '@angular/cdk/overlay';
 import { FormsModule } from '@angular/forms';
 
 import { ToastrService } from 'ngx-toastr';
@@ -64,6 +65,7 @@ const SCENE_PREVIEW_MS: number = 2000;
     MatInputModule,
     MatSelectModule,
     MatTooltipModule,
+    OverlayModule,
     FormsModule,
     MessageComponent
   ]
@@ -89,6 +91,12 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   protected screenDevices: ArenaCaptureDevice[] = [];
   protected cameraDevices: ArenaCaptureDevice[] = [];
   protected selectedDeviceId?: string;
+  /** Sélecteur de webcam affiché en surcouche, derrière un backdrop. */
+  protected webcamPickerOpen: boolean = false;
+  /** À droite du bouton, aligné sur son haut. */
+  protected readonly webcamPickerPositions: ConnectedPosition[] = [
+    { originX: 'end', originY: 'top', overlayX: 'start', overlayY: 'top' }
+  ];
   /** Webcams posables dans la scène, avec un libellé qui distingue les homonymes. */
   protected webcamOptions: { device: ArenaCaptureDevice; label: string }[] =
     [];

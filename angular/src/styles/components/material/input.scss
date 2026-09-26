@@ -14,13 +14,13 @@ mat-form-field {
 
   > .mat-mdc-text-field-wrapper {
     $border-size: 1px;
-    border-radius: 0;
     background-color: variables.$dark_color !important;
     border: $border-size solid variables.$border_color;
-    padding: 0 variables.$margin;
+    padding: 0 calc(#{variables.$spacing} * 3);
     height: variables.$form_height;
     overflow: visible;
     position: relative;
+    border-radius: variables.$spacing;
 
     > .mat-mdc-form-field-focus-overlay {
       display: none;
@@ -41,31 +41,26 @@ mat-form-field {
           }
         }
 
-        > .buttons {
-          display: flex;
+        > button {
           position: absolute;
           top: 0;
           right: 0;
+          min-height: calc(#{variables.$form_height} - 2px);
+          min-width: calc(#{variables.$form_height} - 2px);
+          border: none;
+          padding: 0;
+          background-color: transparent;
+          transform: translateX(calc(#{variables.$spacing} * 3));
+          cursor: pointer;
+          color: material_colors.$white;
 
-          > button {
-            min-height: calc(#{variables.$form_height} - 2px);
-            min-width: calc(#{variables.$form_height} - 2px);
-            border-width: 0 0 0 1px;
-            padding: 0;
-            background-color: transparent;
-            transform: translateX(variables.$margin);
-            cursor: pointer;
-            color: material_colors.$white;
-            background-color: variables.$dark_color;
+          &:before,
+          &:after {
+            content: none;
+          }
 
-            &:before,
-            &:after {
-              content: none;
-            }
-
-            > i {
-              margin-right: 0;
-            }
+          > i {
+            margin-right: 0;
           }
         }
 
@@ -76,6 +71,11 @@ mat-form-field {
           min-height: calc(#{variables.$form_height} - #{$border-size} * 2);
           line-height: calc(#{variables.$form_height} - #{$border-size} * 2);
           -webkit-appearance: none;
+
+          // Un champ en lecture seule ne se saisit pas : le curseur ne doit pas le promettre.
+          &[readonly] {
+            cursor: default;
+          }
 
           &[type='number'] {
             -moz-appearance: textfield; // Firefox
@@ -95,19 +95,21 @@ mat-form-field {
         > label {
           top: 50%;
           color: material_colors.$white !important;
-          font-size: variables.$margin;
+          font-size: calc(#{variables.$spacing} * 3);
           transition: none;
           background-color: variables.$dark_color;
 
           &.mdc-floating-label--float-above {
             top: calc(#{$border-size} * -1);
-            left: calc(#{variables.$margin} * -1 - #{$border-size});
+            left: calc(#{variables.$spacing} * -3 - #{$border-size});
             transform: translateY(-50%);
             border-style: solid;
             border-width: $border-size $border-size 0 $border-size;
             border-color: variables.$border_color;
-            padding: calc(#{variables.$margin} / 3) variables.$margin 0
-              variables.$margin;
+            border-top-left-radius: variables.$spacing;
+            border-top-right-radius: variables.$spacing;
+            padding: variables.$spacing calc(#{variables.$spacing} * 3) 0
+              calc(#{variables.$spacing} * 3);
             overflow: visible;
 
             &:after {
@@ -129,27 +131,59 @@ mat-form-field {
     }
   }
 
+  @each $size, $pixel in variables.$sizes {
+    @media (min-width: $pixel) {
+      @for $i from 0 through 100 {
+        &.radius-top-left#{$size}-#{$i} {
+          > .mat-mdc-text-field-wrapper {
+            border-top-left-radius: 1px * $i !important;
+          }
+        }
+
+        &.radius-top-right#{$size}-#{$i} {
+          > .mat-mdc-text-field-wrapper {
+            border-top-right-radius: 1px * $i !important;
+          }
+        }
+
+        &.radius-bottom-left#{$size}-#{$i} {
+          > .mat-mdc-text-field-wrapper {
+            border-bottom-left-radius: 1px * $i !important;
+          }
+        }
+
+        &.radius-bottom-right#{$size}-#{$i} {
+          > .mat-mdc-text-field-wrapper {
+            border-bottom-right-radius: 1px * $i !important;
+          }
+        }
+      }
+    }
+  }
+
+  // La bordure visible est portée par le wrapper, pas par l'hôte : un `border-r-0` posé sur le
+  // `mat-form-field` n'aurait donc aucun effet sans ce relais (cf. les classes `radius-*`).
+  &.border-r-0 {
+    > .mat-mdc-text-field-wrapper {
+      border-right-width: 0 !important;
+    }
+  }
+
   > .mat-mdc-form-field-subscript-wrapper {
     display: none;
   }
 
   &.mat-focused {
     > .mat-mdc-text-field-wrapper {
-      padding: 0 calc(#{variables.$margin} - 1px);
+      padding: 0 calc(#{variables.$spacing} * 3 - 1px);
       $border-size: 2px;
       border-width: $border-size;
       border-color: variables.$main_color;
 
       > .mat-mdc-form-field-flex {
         > .mat-mdc-form-field-infix {
-          > .buttons {
-            > button {
-              height: calc(#{variables.$form_height} - 4px);
-              top: -1px;
-              border-width: 0 1px 0 2px;
-              border-color: transparent transparent transparent
-                variables.$main_color;
-            }
+          > button {
+            height: calc(#{variables.$form_height} - 4px);
           }
 
           > input {
@@ -168,12 +202,14 @@ mat-form-field {
             border-width: $border-size $border-size 0px $border-size;
             border-color: variables.$main_color;
             top: calc(#{$border-size} * -1);
-            left: calc((#{variables.$margin} + 1px) * -1);
+            left: calc((#{variables.$spacing} * 3 + 1px) * -1);
             transform: translateY(-50%);
-            padding: calc(#{variables.$margin} / 3 - 1px)
-              calc(#{variables.$margin} - 1px) 0
-              calc(#{variables.$margin} - 1px);
+            padding: calc(#{variables.$spacing} - 1px)
+              calc(#{variables.$spacing} * 3 - 1px) 0
+              calc(#{variables.$spacing} * 3 - 1px);
             overflow: visible;
+            border-top-left-radius: variables.$spacing;
+            border-top-right-radius: variables.$spacing;
 
             &:after {
               content: '';
@@ -190,76 +226,47 @@ mat-form-field {
     }
   }
 
-  &.orange {
-    &.mat-focused {
-      > .mat-mdc-text-field-wrapper {
-        border-color: variables.$orange_color;
+  &.red {
+    > .mat-mdc-text-field-wrapper {
+      border-color: material_colors.$material_red_500;
+    }
 
-        > .mat-mdc-form-field-flex {
-          > .mat-mdc-form-field-infix {
-            > .buttons {
-              > button {
-                border-color: transparent transparent transparent
-                  variables.$orange_color;
-              }
-            }
+    label {
+      border-color: material_colors.$material_red_500 !important;
 
-            > input {
-              caret-color: variables.$orange_color;
-            }
-
-            > label {
-              color: variables.$orange_color !important;
-              border-color: variables.$orange_color;
-            }
-          }
-        }
+      > mat-label {
+        color: material_colors.$material_red_500 !important;
       }
     }
   }
 
-  &.blue {
-    &.mat-focused {
-      > .mat-mdc-text-field-wrapper {
-        border-color: variables.$blue_color;
+  &.green {
+    > .mat-mdc-text-field-wrapper {
+      border-color: material_colors.$material_green_500;
+    }
 
-        > .mat-mdc-form-field-flex {
-          > .mat-mdc-form-field-infix {
-            > .buttons {
-              > button {
-                border-color: transparent transparent transparent
-                  variables.$blue_color;
-              }
-            }
+    label {
+      border-color: material_colors.$material_green_500 !important;
 
-            > input {
-              caret-color: variables.$blue_color;
-            }
-
-            > label {
-              color: variables.$blue_color !important;
-              border-color: variables.$blue_color;
-            }
-          }
-        }
+      > mat-label {
+        color: material_colors.$material_green_500 !important;
       }
     }
   }
 }
 
 label {
-  margin: 0;
   position: relative;
   display: block;
 
   > span {
     display: block;
-    padding: calc(#{variables.$margin} / 3) variables.$margin 0
-      variables.$margin;
+    padding: variables.$spacing calc(#{variables.$spacing} * 3) 0
+      calc(#{variables.$spacing} * 3);
     color: #fff;
     width: fit-content;
-    font-size: variables.$margin;
-    line-height: variables.$margin;
+    font-size: calc(#{variables.$spacing} * 3);
+    line-height: calc(#{variables.$spacing} * 3);
     position: absolute;
     top: 0;
     left: 0;
@@ -267,27 +274,32 @@ label {
     border-style: solid;
     border-color: variables.$border_color;
     border-width: 1px 0 0 1px;
+    border-top-left-radius: variables.$spacing;
+    border-top-right-radius: variables.$spacing;
 
     &:before,
     &:after {
       content: '';
       position: absolute;
-      top: 0;
     }
 
     &:before {
+      top: 0;
       left: 0;
       height: 100%;
       width: 100%;
       background-color: variables.$dark_color;
       z-index: -1;
+      border-top-right-radius: variables.$spacing;
+      border-top-left-radius: variables.$spacing;
     }
 
     &:after {
+      top: 1px;
       right: 0;
-      height: calc(#{variables.$margin} / 4 * 3);
+      height: calc(#{variables.$spacing} * 3 / 4 * 3 - 1px);
       width: 1px;
-      background-color: #6c757d;
+      background-color: variables.$border-color;
     }
   }
 
@@ -295,8 +307,8 @@ label {
     > span {
       border-color: variables.$main_color;
       border-width: 2px 0 0 2px;
-      padding: calc(#{variables.$margin} / 3) calc(#{variables.$margin} - 1px) 0
-        calc(#{variables.$margin} - 1px);
+      padding: variables.$spacing calc(#{variables.$spacing} * 3 - 1px) 0
+        calc(#{variables.$spacing} * 3 - 1px);
       color: variables.$main_color;
 
       &:after {
@@ -307,7 +319,7 @@ label {
 
     > input {
       border-width: 2px;
-      padding: 0 calc(#{variables.$margin} - 1px);
+      padding: 0 calc(#{variables.$spacing} * 3 - 1px);
     }
   }
 
@@ -322,7 +334,7 @@ label {
       border-width: 1px 0 1px 1px;
       display: block;
       width: fit-content;
-      padding: 0 variables.$margin;
+      padding: 0 calc(#{variables.$spacing} * 3);
     }
 
     > input {
@@ -337,7 +349,7 @@ select,
 	width: 100% !important;
 	border-radius: 0 !important;
 	border: 1px solid variables.$border_color !important;
-	padding: 0 variables.$margin !important;
+	padding: 0 calc(#{variables.$spacing} * 3) !important;
 	height: variables.$form_height;
 	line-height: variables.$form_height;
 	color: white;
@@ -365,8 +377,9 @@ textarea {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  padding: 0 variables.$margin;
-  min-height: calc(#{variables.$margin} * 8);
+  padding: 0 calc(#{variables.$spacing} * 3);
+  min-height: calc(#{variables.$spacing} * 24);
+  border-radius: variables.$spacing;
 
   &:focus {
     outline: none;
@@ -383,10 +396,18 @@ input {
   &[type='date'],
   &[type='time'],
   &[type='datetime-local'] {
-    cursor: pointer;
-
     &::-webkit-calendar-picker-indicator {
       filter: invert(100%);
+    }
+
+    &:not([disabled]) {
+      cursor: pointer;
+    }
+
+    &[disabled] {
+      cursor: not-allowed;
+      color: rgba(white, 0.5);
+      border-color: rgba(variables.$border_color, 0.5);
     }
   }
 
@@ -402,10 +423,23 @@ input {
     background-color: variables.$dark_color;
     border: 1px solid variables.$border_color;
     color: white;
-    padding: 0 variables.$margin;
+    padding: 0 calc(#{variables.$spacing} * 3);
     box-sizing: border-box;
-    border-radius: 0;
+    border-radius: variables.$spacing;
     width: 100%;
+    border-top-left-radius: 0;
+
+    // Le contrôle natif iOS ignore `box-sizing: border-box` : padding et bordures
+    // s'ajoutent à la taille calculée au lieu d'y être compris. On les retranche.
+    @supports (-webkit-touch-callout: none) {
+      @media (min-width: 768px) {
+        width: calc(100% - 12px * 2);
+        height: calc(#{variables.$form_height} - 1px * 2);
+        // Inline, le champ laisse 5px de descente sous la baseline dans son
+        // `<label>` : une fois la ligne centrée, il remonte d'autant de moitié.
+        display: block;
+      }
+    }
 
     &:focus {
       outline: none;
@@ -418,12 +452,19 @@ input {
     }
   }
 
+  &[type='datetime-local'] {
+    @supports (-webkit-touch-callout: none) {
+      padding: 0 !important;
+      text-align: left;
+    }
+  }
+
   &[type='checkbox'] {
     outline: none;
     border: 1px solid variables.$border_color;
     background-color: transparent;
     position: relative;
-    margin-right: variables.$margin;
+    margin-right: calc(#{variables.$spacing} * 3);
     transform: translateY(3px);
     border-radius: 0;
 
@@ -461,4 +502,15 @@ label:has(
   input[type='time']:not(.readonly):focus
 ) {
   color: variables.$main_color;
+}
+
+label:has(input[type='datetime-local']:disabled) {
+  > span {
+    color: rgba(white, 0.5);
+    border-color: rgba(variables.$border_color, 0.5);
+
+    &:after {
+      background-color: rgba(variables.$border_color, 0.5);
+    }
+  }
 }

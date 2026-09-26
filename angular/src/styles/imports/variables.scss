@@ -4,8 +4,9 @@
 
 @use 'sass:map';
 
+$spacing: 4px;
 $margin: 12px;
-$form_height: 36px;
+$form_height: 32px;
 $font_size: 14px;
 $transitionTime: 300ms;
 
@@ -33,14 +34,35 @@ $sizes: (
   '-xl5': map.get($grid_breakpoints, 'xl5')
 );
 
+// Breakpoints Tailwind, à garder synchronisés avec src/tailwind.css.
+$tailwind_breakpoints: (
+  'sm': 40rem,
+  'md': 48rem,
+  'lg': 64rem,
+  'xl': 80rem,
+  '2xl': 96rem,
+  '3xl': 112rem,
+  '4xl': 128rem,
+  '5xl': 144rem
+);
+
 //#region Colors
 
 $main_color: #ebac78;
-$dark_color: #0c0c10;
 $discord_color: #7289da;
 $border_color: #6c757d;
 
 $orange_color: #b86d00;
 $blue_color: #0073bb;
+
+$evacoaching_color: #fe533b;
+
+$eva_color: #4b11e2;
+$eva_color_hover: #2e00a3;
+
+$dark_color: #0b0b0b;
+$dark_color_2: #151515;
+$dark_color_3: #1f1f1f;
+$dark_color_4: #292929;
 
 //#endregion

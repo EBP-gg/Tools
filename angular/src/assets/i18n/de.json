@@ -185,8 +185,8 @@
         }
       },
       "scene": {
-        "webcam": "Webcam",
         "noWebcam": "Keine",
+        "chooseWebcam": "Webcam auswählen",
         "addImage": "Bild hinzufügen",
         "removeImage": "Bild entfernen",
         "help": "Das Spiel (After-H oder Color Chaos) wird über sein Fenster aufgenommen und füllt den gesamten Rahmen; sein Bild erscheint hier während der Aufnahme. Verschieben Sie Webcam und Bilder per Ziehen, ändern Sie ihre Größe an der unteren rechten Ecke und wenden Sie dann an.",

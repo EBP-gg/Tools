@@ -185,8 +185,8 @@
         }
       },
       "scene": {
-        "webcam": "Webcam",
         "noWebcam": "Aucune",
+        "chooseWebcam": "Choisir la webcam",
         "addImage": "Ajouter une image",
         "removeImage": "Retirer l'image",
         "help": "Le jeu (After-H ou Color Chaos) est filmé par sa fenêtre et occupe tout le cadre ; son image apparaît ici pendant l'enregistrement. Déplacez la webcam et les images en les faisant glisser, redimensionnez-les par leur coin inférieur droit, puis appliquez.",
