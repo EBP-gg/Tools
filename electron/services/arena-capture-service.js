@@ -174,6 +174,9 @@ let webcamRetryDelayMs = WEBCAM_RETRY_BASE_MS;
 let waitingGame = false;
 let gameWaitTimer = null;
 let gameWaitToken = 0;
+// Exécutable du jeu filmé par la scène : ffmpeg ne cible que lui, et un
+// changement de jeu (After-H ↔ Color Chaos) relance la captation.
+let sceneTargetExe = null;
 
 /**
  * Extrait les modes supportés ("1920x1080@[15.000000 60.000000]fps") du stderr
@@ -535,10 +538,13 @@ function sceneArgs(withPreview, overlays, firstInput) {
         );
         CHAINS.push(`[${input++}:v]scale=1920:1080[s0]`);
     } else {
-        // Un seul des jeux tourne à la fois : une alternative suffit.
-        const EXES = arenaAudioService.TARGET_EXECUTABLES.map((exe) =>
-            exe.replace(/\.exe$/i, '')
-        ).join('|');
+        // Le jeu repéré au démarrage (cf. waitForGame) ; à défaut, n'importe
+        // lequel des jeux connus — un seul tourne à la fois.
+        const EXES = (
+            sceneTargetExe ? [sceneTargetExe] : arenaAudioService.TARGET_EXECUTABLES
+        )
+            .map((exe) => exe.replace(/\.exe$/i, ''))
+            .join('|');
         CHAINS.push(
             `gfxcapture=window_exe='(?i)${EXES}':max_framerate=60:capture_cursor=0:width=1920:height=1080:resize_mode=scale_aspect,hwdownload,format=bgra[s0]`
         );
@@ -874,6 +880,34 @@ function startCapture(gameFound = false) {
             PROC.kill();
         }
     }, 5000);
+    // Scène : le jeu filmé peut changer en cours de route (After-H ↔ Color
+    // Chaos). Selon la façon dont la capture de fenêtre réagit à la fermeture,
+    // ffmpeg s'arrêterait seul ou attendrait 30 s des images qui ne viennent
+    // plus — soit le début de la game suivante, dont l'analyseur a besoin. On
+    // surveille donc le jeu ouvert et on relance dès qu'il n'est plus le même.
+    const GAME_TIMER = WAITS_FOR_GAME
+        ? setInterval(() => {
+              arenaAudioService.findTarget().then((target) => {
+                  if (ffmpegProcess !== PROC || stopRequested) return;
+                  if (
+                      target &&
+                      target.exe.toLowerCase() === String(sceneTargetExe).toLowerCase()
+                  ) {
+                      return;
+                  }
+                  clearInterval(GAME_TIMER);
+                  console.log(
+                      `[arena-capture] jeu changé (${sceneTargetExe} → ${target ? target.exe : 'aucun'}) — relance`
+                  );
+                  restartCapture();
+                  // Une capture restée accrochée à la fenêtre fermée pourrait
+                  // ne pas finaliser sur 'q'.
+                  setTimeout(() => {
+                      if (!PROC.killed && PROC.exitCode === null) PROC.kill();
+                  }, 5000);
+              });
+          }, GAME_POLL_MS)
+        : null;
     PROC.stderr.on('data', (d) => {
         const LINE = d.toString().trim();
         if (!LINE) return;
@@ -937,6 +971,7 @@ function startCapture(gameFound = false) {
 
     PROC.on('close', (code) => {
         clearInterval(STALL_TIMER);
+        clearInterval(GAME_TIMER);
         if (ffmpegProcess !== PROC) return;
         ffmpegProcess = null;
         startedAt = null;
@@ -960,12 +995,18 @@ function startCapture(gameFound = false) {
         }
         arenaAudioService.findTarget().then((target) => {
             if (stopRequested || ffmpegProcess || restartTimer) return;
-            if (target) {
+            // Le jeu filmé est toujours là : vraie panne.
+            if (
+                target &&
+                target.exe.toLowerCase() === String(sceneTargetExe).toLowerCase()
+            ) {
                 handleDeath(code);
                 return;
             }
+            // Jeu fermé ou remplacé par l'autre : on repart sur sa fenêtre,
+            // tout de suite s'il est déjà ouvert.
             console.log(
-                `[arena-capture] jeu fermé (code ${code}) — en attente de sa fenêtre`
+                `[arena-capture] jeu fermé ou changé (code ${code}) — reprise sur ${target ? target.exe : 'la prochaine fenêtre'}`
             );
             startCapture();
         });
@@ -1136,6 +1177,7 @@ function waitForGame() {
                 return;
             }
             waitingGame = false;
+            sceneTargetExe = target.exe;
             console.log(`[arena-capture] jeu ouvert (${target.exe}) — démarrage`);
             startCapture(true);
         });
