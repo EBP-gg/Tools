@@ -51,8 +51,8 @@ const SCENE_WIDTH: number = 1920;
 const SCENE_HEIGHT: number = 1080;
 /** Plus petite largeur d'un élément de la scène, pour qu'il reste saisissable. */
 const SCENE_MIN_WIDTH: number = 32;
-/** Cadence de l'aperçu de la scène : ffmpeg réécrit l'image toutes les 2 s. */
-const SCENE_PREVIEW_MS: number = 2000;
+/** Cadence de l'aperçu de la scène : ffmpeg réécrit l'image toutes les secondes. */
+const SCENE_PREVIEW_MS: number = 1000;
 
 @Component({
   selector: 'view-arena-mode',

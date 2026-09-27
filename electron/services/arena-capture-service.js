@@ -106,7 +106,7 @@ const RESTART_BASE_DELAY_MS = 5 * 1000;
 // Aperçu : une seule image JPEG réécrite en boucle, pour que l'admin voie à
 // distance ce qui est réellement filmé. Basse cadence et basse définition — ce
 // n'est pas un flux, c'est une preuve de source.
-const PREVIEW_FPS = '1/2';
+const PREVIEW_FPS = '1';
 const PREVIEW_WIDTH = 480;
 // Image figée depuis une minute : fenêtre du jeu qui ne se rafraîchit plus,
 // image noire… ffmpeg enregistre alors sans rien signaler. Posé sur
