@@ -153,6 +153,8 @@ let gameWaitToken = 0;
 // Exécutable du jeu filmé par la scène : ffmpeg ne cible que lui, et un
 // changement de jeu (After-H ↔ Color Chaos) relance la captation.
 let sceneTargetExe = null;
+// Nettoyage des captations orphelines : une fois par session suffit.
+let orphansChecked = false;
 
 function getSpoolFolder() {
     return StorageManager.getPermanentSettingsValue(
@@ -414,6 +416,74 @@ function buildFfmpegArgs(overlays) {
 }
 
 /**
+ * Tue les captations laissées par un Tools mort (plantage, Ctrl-C en dev) :
+ * plus personne ne les arrêtera, elles remplissent le spool et une a déjà
+ * atteint 95 Go de mémoire. Seules celles dont le parent est mort sont visées,
+ * pour épargner la captation d'une autre instance vivante (dev + prod).
+ * @param {string} spool Dossier où écrivent nos captations.
+ */
+function killOrphanCaptures(spool) {
+    const MARKER = path.join(spool, 'rec_');
+    let procs;
+    if (process.platform === 'win32') {
+        const RES = spawnSync(
+            'powershell.exe',
+            [
+                '-NoProfile',
+                '-NonInteractive',
+                '-Command',
+                "Get-CimInstance Win32_Process -Filter \"Name LIKE 'ffmpeg%'\" | " +
+                    'Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress'
+            ],
+            { encoding: 'utf8', timeout: 15000, windowsHide: true }
+        );
+        try {
+            procs = [].concat(JSON.parse(RES.stdout || '[]')).map((p) => ({
+                pid: p.ProcessId,
+                ppid: p.ParentProcessId,
+                cmd: p.CommandLine || ''
+            }));
+        } catch (_) {
+            console.warn('[arena-capture] liste des processus illisible — orphelins non vérifiés');
+            return;
+        }
+    } else {
+        const RES = spawnSync('ps', ['-axww', '-o', 'pid=,ppid=,command='], {
+            encoding: 'utf8'
+        });
+        procs = (RES.stdout || '')
+            .split('\n')
+            .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
+            .filter(Boolean)
+            .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] }));
+    }
+
+    // Unix rattache l'orphelin à launchd/init (PID 1) ; Windows garde le PID
+    // d'un parent qui n'existe plus.
+    const PARENT_ALIVE = (ppid) => {
+        if (ppid === 1) return false;
+        try {
+            process.kill(ppid, 0);
+            return true;
+        } catch (e) {
+            return e.code === 'EPERM';
+        }
+    };
+    for (const P of procs) {
+        if (!P.cmd.includes(FFMPEG_PATH) || !P.cmd.includes(MARKER)) continue;
+        if (PARENT_ALIVE(P.ppid)) continue;
+        // SIGKILL : un orphelin bloqué ignore 'q' comme SIGINT, et le mkv
+        // tronqué reste lisible.
+        try {
+            process.kill(P.pid, 'SIGKILL');
+            console.warn(`[arena-capture] captation orpheline tuée (pid ${P.pid})`);
+        } catch (e) {
+            console.warn(`[arena-capture] orpheline ${P.pid} non tuée : ${e.message}`);
+        }
+    }
+}
+
+/**
  * Démarre la captation. Sous Windows, elle attend d'abord que le jeu soit
  * ouvert (cf. waitForGame), puis ffmpeg filme sa fenêtre. No-op si déjà en
  * cours.
@@ -424,6 +494,11 @@ function startCapture(gameFound = false) {
 
     const SPOOL = getSpoolFolder();
     if (!fs.existsSync(SPOOL)) fs.mkdirSync(SPOOL, { recursive: true });
+
+    if (!orphansChecked) {
+        orphansChecked = true;
+        killOrphanCaptures(SPOOL);
+    }
 
     stopRequested = false;
     lastError = null;

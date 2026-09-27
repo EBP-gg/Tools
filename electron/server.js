@@ -3109,4 +3109,13 @@ if (!APP_GOT_THE_LOCK) {
     app.on('window-all-closed', function () {
         if (process.platform !== 'darwin') app.quit();
     });
+
+    // Sans ça, ffmpeg survit à Tools et continue de filmer, orphelin. Pas de
+    // `before-quit` : il est émis même quand la fenêtre annule la fermeture
+    // pour se cacher, ce qui couperait la captation d'une app toujours ouverte.
+    // Pas d'attente non plus (`preventDefault`), qui retarderait
+    // `quitAndInstall` : le 'q' part tout de suite, ffmpeg finalise seul.
+    app.on('will-quit', () => {
+        arenaCaptureService.stopCapture();
+    });
 })();
