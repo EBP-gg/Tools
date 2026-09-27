@@ -54,7 +54,7 @@ $paddingLeft: calc(#{variables.$margin} * 4);
 
     > .language_selector {
       position: relative;
-      height: variables.$form_height;
+      height: 100%;
 
       > img {
         position: absolute;
