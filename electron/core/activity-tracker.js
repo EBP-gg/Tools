@@ -3,6 +3,7 @@
 // See LICENSE for terms. Unauthorized use is prohibited.
 
 const childProcess = require('child_process');
+const util = require('util');
 
 /**
  * Suivi de l'occupation de l'application, pour ne jamais appliquer une mise à
@@ -88,6 +89,15 @@ function install() {
 
     childProcess.spawn = (...args) => track(SPAWN(...args));
     childProcess.execFile = (...args) => track(EXEC_FILE(...args));
+
+    // `util.promisify(execFile)` résout `{ stdout, stderr }` grâce à cette
+    // version dédiée ; sans elle, il ne résoudrait que `stdout`.
+    const EXEC_FILE_ASYNC = EXEC_FILE[util.promisify.custom];
+    childProcess.execFile[util.promisify.custom] = (...args) => {
+        const PROMISE = EXEC_FILE_ASYNC(...args);
+        track(PROMISE.child);
+        return PROMISE;
+    };
 }
 
 /**
