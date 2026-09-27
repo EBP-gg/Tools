@@ -149,7 +149,7 @@
       "urlLabel": "YouTube / Twitch URL"
     },
     "arena_mode": {
-      "intro": "This page sets up Tools on the streaming PC of an EVA venue. Once the venue is identified, games played in the arena are automatically recorded in original quality, analyzed, then sent to EBP.<br/><br/>When importing their games, players instantly get their videos and analyses.",
+      "intro": "This page sets up Tools on the streaming PC of an EVA venue. Once the venue is identified, games played in the arena are automatically recorded in original quality, then sent to EBP.<br/><br/>When importing their games, players instantly get their games and their videos.",
       "roomId": "Venue",
       "arenaId": "Arena",
       "key": "Key",
@@ -161,14 +161,10 @@
         "network": "Network error, please try again."
       },
       "capture": {
-        "device": "Video source",
         "waitingFrame": "Waiting for the first frame from the source. Recording starts as soon as it arrives: if this message persists, the source is not producing any image.",
         "waitingGame": "Waiting for the game: recording will start as soon as After-H or Color Chaos is open.",
-        "screens": "Screens",
-        "cameras": "Virtual cameras",
-        "refresh": "Refresh list",
-        "recording": "Recording from \"{{device}}\". Detected games will be analyzed and uploaded automatically.",
-        "stopped": "Capture is stopped. Select a video source then start the capture.",
+        "recording": "Recording. Detected games will be analyzed and uploaded automatically.",
+        "stopped": "Capture is stopped. Start it to record games.",
         "error": "Capture stopped with an error:",
         "start": "Start capture",
         "stop": "Stop capture",

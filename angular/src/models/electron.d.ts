@@ -60,21 +60,12 @@ export interface ArenaModeState {
   terrainName?: string;
 }
 
-export interface ArenaCaptureDevice {
+/** Caméra posable dans la scène, physique ou virtuelle. */
+export interface ArenaWebcam {
+  /** Chemin dshow (Windows) ou index avfoundation (macOS). */
   id: string;
   name: string;
-  /**
-   * `scene` : Tools Virtual Scene (fenêtre du jeu + webcam + images).
-   * `webcam` : caméra posable dans la scène, physique ou virtuelle.
-   */
-  kind: 'screen' | 'camera' | 'scene' | 'webcam';
-  /** Écrans Windows uniquement : adaptateur et sortie DXGI pour ddagrab. */
-  adapter?: number;
-  outputIndex?: number;
-  /** Écrans Windows uniquement : image captée par ddagrab, sert d'aperçu. */
-  thumbnail?: string | null;
-  width?: number;
-  height?: number;
+  kind: 'webcam';
 }
 
 /** Élément posé sur le jeu, en pixels du cadre 1920×1080. */
@@ -116,21 +107,18 @@ export interface ArenaAudioLevel {
 }
 
 export interface ArenaCaptureStatus {
+  /** ffmpeg écrit réellement des segments. */
   running: boolean;
-  deviceId: string | null;
-  deviceName: string | null;
-  deviceKind: 'screen' | 'camera' | 'scene' | null;
-  deviceThumbnail: string | null;
   encoder: string | null;
   startedAt: number | null;
   lastError: string | null;
   spoolFolder: string;
   segmentSeconds: number;
-  /** Faux tant que ddagrab n'a produit aucune image : rien n'est enregistré. */
+  /** Faux tant que ffmpeg n'a produit aucune image : rien n'est enregistré. */
   videoStarted: boolean;
   /** Webcam de la scène écartée après une panne : enregistrement sans elle. */
   webcamSuspended: boolean;
-  /** Scène armée, en attente de la fenêtre du jeu : rien n'est enregistré. */
+  /** Captation armée, en attente de la fenêtre du jeu : rien n'est enregistré. */
   waitingGame: boolean;
   audio: {
     running: boolean;
@@ -223,11 +211,8 @@ export interface ElectronAPI {
     key: string
   ) => Promise<{ success: boolean; state?: ArenaModeState; error?: string }>;
   arenaModeUnregister: () => Promise<ArenaModeState>;
-  arenaCaptureListDevices: () => Promise<ArenaCaptureDevice[]>;
+  arenaCaptureListWebcams: () => Promise<ArenaWebcam[]>;
   arenaCaptureGetStatus: () => Promise<ArenaCaptureStatus>;
-  arenaCaptureSetDevice: (
-    device: ArenaCaptureDevice
-  ) => Promise<ArenaCaptureStatus>;
   arenaCaptureStart: () => Promise<ArenaCaptureStatus>;
   arenaCaptureStop: () => Promise<ArenaCaptureStatus>;
   arenaCaptureGetPreview: () => Promise<string | null>;

@@ -149,7 +149,7 @@
       "urlLabel": "URL YouTube / Twitch"
     },
     "arena_mode": {
-      "intro": "Cette page permet d'installer Tools sur le PC de streaming d'une salle EVA. Une fois la salle identifiée, les parties jouées dans l'arène seront automatiquement enregistrées en qualité originale, analysées, puis envoyées sur EBP.<br/><br/>À l'import de leurs games, les joueurs retrouvent instantanément leurs vidéos et leurs analyses.",
+      "intro": "Cette page permet d'installer Tools sur le PC de streaming d'une salle EVA. Une fois la salle identifiée, les parties jouées dans l'arène seront automatiquement enregistrées en qualité originale, puis envoyées sur EBP.<br/><br/>À l'import de leurs games, les joueurs retrouvent instantanément leurs games et leurs vidéos.",
       "roomId": "Salle",
       "arenaId": "Arène",
       "key": "Clé",
@@ -161,14 +161,10 @@
         "network": "Erreur réseau, veuillez réessayer."
       },
       "capture": {
-        "device": "Source vidéo",
         "waitingFrame": "En attente de la première image de la source. L'enregistrement démarre dès qu'elle arrive : si ce message persiste, la source ne produit aucune image.",
         "waitingGame": "En attente du jeu : l'enregistrement démarrera dès qu'After-H ou Color Chaos sera ouvert.",
-        "screens": "Écrans",
-        "cameras": "Caméras virtuelles",
-        "refresh": "Rafraîchir la liste",
-        "recording": "Enregistrement en cours depuis « {{device}} ». Les parties détectées seront analysées et envoyées automatiquement.",
-        "stopped": "La captation est arrêtée. Sélectionnez une source vidéo puis démarrez la captation.",
+        "recording": "Enregistrement en cours. Les parties détectées seront analysées et envoyées automatiquement.",
+        "stopped": "La captation est arrêtée. Démarrez-la pour enregistrer les parties.",
         "error": "La captation s'est arrêtée avec une erreur :",
         "start": "Démarrer la captation",
         "stop": "Arrêter la captation",

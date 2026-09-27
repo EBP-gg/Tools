@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('child_process');
-const { screen, nativeImage } = require('electron');
+const { nativeImage } = require('electron');
 const { FFMPEG_PATH } = require('../config/constants');
 const StorageManager = require('../core/storage-manager');
 const arenaAudioService = require('./arena-audio-service');
@@ -16,12 +16,15 @@ const arenaModeService = require('./arena-mode-service');
 
 //#endregion
 
-// Mode salle — brique de CAPTATION. Contrat : lit un périphérique vidéo (la
-// caméra virtuelle qui reçoit le flux du jeu) et écrit des segments vidéo dans
-// le dossier spool. Le reste du pipeline (détection loading/score frame,
-// découpe, analyse, upload) ne consomme QUE ce dossier : si la source change
-// demain (enregistrement OBS local, carte de capture), seule cette brique est
-// remplacée.
+// Mode salle — brique de CAPTATION. Contrat : filme la scène « Tools Virtual
+// Scene » (la fenêtre du jeu, plus webcam et images) et écrit des segments
+// vidéo dans le dossier spool. Le reste du pipeline (détection loading/score
+// frame, découpe, analyse, upload) ne consomme QUE ce dossier : si la source
+// change demain, seule cette brique est remplacée.
+//
+// C'est la seule source : les écrans (ddagrab) et les caméras virtuelles (OBS)
+// ont été retirés — numéro d'écran instable, écran qui disparaît, caméra
+// virtuelle coupée par un autre usage d'OBS.
 //
 // Enregistrement en segments mkv (crash-safe : un mkv tronqué reste lisible,
 // contrairement à un mp4 sans moov) de SEGMENT_SECONDS. Une game à cheval sur
@@ -29,7 +32,6 @@ const arenaModeService = require('./arena-mode-service');
 // stream-copy). ffmpeg est relancé automatiquement s'il meurt : PC de salle
 // sans surveillance.
 
-const SETTINGS_KEY_DEVICE = 'arenaCaptureDevice';
 const SETTINGS_KEY_SPOOL = 'arenaSpoolFolder';
 // Scène : webcam et images posées PAR-DESSUS le jeu, qui reste en plein cadre.
 const SETTINGS_KEY_SCENE = 'arenaScene';
@@ -100,27 +102,17 @@ function resolveEncoder() {
 // images excédentaires à l'encodage : à bitrate égal, 30 fps = plus de qualité
 // par image (meilleur OCR) et moitié moins de charge encodeur.
 const OUTPUT_FPS = 30;
-// Adaptateurs graphiques sondés à la recherche de sorties capturables.
-const MAX_ADAPTERS = 4;
 const RESTART_BASE_DELAY_MS = 5 * 1000;
 // Aperçu : une seule image JPEG réécrite en boucle, pour que l'admin voie à
 // distance ce qui est réellement filmé. Basse cadence et basse définition — ce
 // n'est pas un flux, c'est une preuve de source.
 const PREVIEW_FPS = '1/2';
 const PREVIEW_WIDTH = 480;
-// Image figée depuis une minute : écran « caméra virtuelle inactive » d'OBS,
-// écran éteint ou noir… ffmpeg enregistre alors sans rien signaler. Posé sur
+// Image figée depuis une minute : fenêtre du jeu qui ne se rafraîchit plus,
+// image noire… ffmpeg enregistre alors sans rien signaler. Posé sur
 // la branche d'aperçu (déjà en RAM, 1 image / 2 s), il ne coûte rien ; ffmpeg
 // logge `freeze_start` puis `freeze_end`, recopiés dans les logs.
 const FREEZE_FILTER = 'freezedetect=d=60';
-// FUSIBLE. La sortie d'aperçu ajoute une branche au filtergraph, et sur le
-// montage NVENC zéro-copie cette branche impose un `hwdownload` — celui-là même
-// qui a déjà fait échouer NVENC quand il était sur le chemin de l'encodeur. Si
-// ffmpeg meurt dans les premières secondes avec l'aperçu actif, on relance SANS
-// et on ne réessaie plus de la session : une salle perd son aperçu, jamais son
-// enregistrement.
-const PREVIEW_FUSE_MS = 10 * 1000;
-let previewDisabled = false;
 const RESTART_MAX_DELAY_MS = 60 * 1000;
 // Plus aucune image encodée depuis ce délai alors que ffmpeg tourne : le graphe
 // est bloqué (une webcam qui cesse d'émettre peut suffire à le figer). On tue
@@ -131,10 +123,6 @@ const STALL_MS = 30 * 1000;
 // par un autre logiciel ne coupe pas l'enregistrement toutes les minutes.
 const WEBCAM_RETRY_BASE_MS = 60 * 1000;
 const WEBCAM_RETRY_MAX_MS = 30 * 60 * 1000;
-// Source « Tools Virtual Scene » : la fenêtre du jeu, plus webcam et images.
-// La capture de fenêtre est propre à Windows ; sur macOS (dev) le jeu est
-// remplacé par le premier écran, pour pouvoir travailler l'éditeur.
-const SCENE_DEVICE = { id: 'tools-scene', name: 'Tools Virtual Scene', kind: 'scene' };
 // Attente de la fenêtre du jeu : c'est le délai de démarrage d'une game après
 // l'ouverture du jeu, il doit rester court (l'analyseur a besoin du début).
 const GAME_POLL_MS = 3000;
@@ -148,61 +136,23 @@ let lastError = null;
 // Dernières lignes stderr de ffmpeg : en cas d'échec au démarrage (device
 // invalide, framerate non supporté…), c'est le seul diagnostic utile.
 let stderrTail = [];
-// Mode imposé par le périphérique (avfoundation exige un framerate/taille
-// EXACTEMENT supportés — ex. OBS Virtual Camera = 1920x1080@60 uniquement).
-// Détecté en parsant le "Supported modes:" que ffmpeg logge quand le mode
-// demandé est refusé, puis réessayé aussitôt. Réinitialisé au changement de
-// périphérique.
-let detectedMode = null;
-// Résolution refusée : l'analyseur travaille en coordonnées 1920×1080
-// absolues, donc la captation exige une source 1080p — pas d'upscale filet de
-// sécurité (décision Antoine), on refuse et on affiche l'erreur. Ce flag
-// bloque le redémarrage automatique : relancer en boucle sur une source 720p
-// ne la transformera pas en 1080p.
-let resolutionRejected = false;
 // Première image reçue de la source. Tant qu'elle n'est pas arrivée, RIEN
-// n'est enregistré : ddagrab ne produit une image que lorsque l'écran change,
-// et sur un écran figé l'attente peut durer des dizaines de secondes.
+// n'est enregistré.
 let videoStarted = false;
 // Webcam de la scène écartée après une panne de ffmpeg : l'enregistrement
 // continue sans elle jusqu'à ce qu'elle réapparaisse (cf. scheduleWebcamRetry).
 let webcamSuspended = false;
 let webcamRetryTimer = null;
 let webcamRetryDelayMs = WEBCAM_RETRY_BASE_MS;
-// Scène armée, en attente de la fenêtre du jeu. Le jeton invalide une attente
-// en cours quand la captation est arrêtée ou relancée.
+// Captation armée, en attente de la fenêtre du jeu : ffmpeg ne tourne pas. Le
+// jeton invalide une attente en cours quand la captation est arrêtée ou
+// relancée.
 let waitingGame = false;
 let gameWaitTimer = null;
 let gameWaitToken = 0;
 // Exécutable du jeu filmé par la scène : ffmpeg ne cible que lui, et un
 // changement de jeu (After-H ↔ Color Chaos) relance la captation.
 let sceneTargetExe = null;
-
-/**
- * Extrait les modes supportés ("1920x1080@[15.000000 60.000000]fps") du stderr
- * d'un ffmpeg qui a refusé le mode demandé, et renvoie le mode 1920×1080 s'il
- * existe (fps = max de la plage), sinon le premier de la liste (que le caller
- * rejettera : la captation exige du 1080p). Null si aucun mode listé.
- */
-function parseSupportedMode(lines) {
-    const MODES = [];
-    for (const LINE of lines) {
-        const RE = /(\d{3,4})x(\d{3,4})@\[([\d. ]+)\]/g;
-        let m;
-        while ((m = RE.exec(LINE)) !== null) {
-            const FPS_LIST = m[3].trim().split(/\s+/).map(parseFloat);
-            MODES.push({
-                width: parseInt(m[1], 10),
-                height: parseInt(m[2], 10),
-                fps: Math.round(Math.max(...FPS_LIST))
-            });
-        }
-    }
-    if (MODES.length === 0) return null;
-    return (
-        MODES.find((x) => x.width === 1920 && x.height === 1080) || MODES[0]
-    );
-}
 
 function getSpoolFolder() {
     return StorageManager.getPermanentSettingsValue(
@@ -228,31 +178,13 @@ function getPreviewPath() {
     return path.join(path.dirname(getSpoolFolder()), 'preview.jpg');
 }
 
-function getDevice() {
-    return StorageManager.getPermanentSettingsValue(SETTINGS_KEY_DEVICE);
-}
-
-function setDevice(device) {
-    // La vignette est une donnée d'affichage volumineuse et périssable : elle
-    // reste en mémoire, elle n'a rien à faire dans les réglages permanents.
-    const { thumbnail, ...STORED } = device || {};
-    if (thumbnail && typeof STORED.outputIndex === 'number') {
-        screenThumbnails[`${STORED.adapter || 0}-${STORED.outputIndex}`] =
-            thumbnail;
-    }
-    StorageManager.setPermanentSettingsValue(SETTINGS_KEY_DEVICE, STORED);
-}
-
-/** Dernière image captée par sortie ddagrab, pour l'aperçu (mémoire seule). */
-let screenThumbnails = {};
-
 /**
  * Liste les périphériques vidéo via ffmpeg (avfoundation sur macOS, dshow sur
  * Windows). ffmpeg sort la liste sur stderr et se termine en erreur : c'est le
  * comportement attendu, on parse quoi qu'il arrive.
- * Sépare les écrans (avfoundation les expose comme des caméras) des caméras
- * virtuelles.
- * @returns {{screens: object[], cameras: object[]}}  id = index avfoundation ou chemin dshow.
+ * Sépare les écrans (avfoundation les expose comme des caméras, macOS
+ * seulement) des webcams.
+ * @returns {{screens: object[], webcams: object[]}}  id = index avfoundation ou chemin dshow.
  */
 function listCaptureDevices() {
     const IS_MAC = process.platform === 'darwin';
@@ -301,169 +233,18 @@ function listCaptureDevices() {
               kind: 'screen'
           }))
         : [];
-    // Le pipeline salle ne capte QUE des caméras VIRTUELLES (le flux du jeu via
-    // OBS Virtual Camera & co) : la source doit être un rendu 1080p, pas une
-    // webcam physique. Les webcams physiques sont de toute façon exclusives
-    // sous Windows (impossible à prévisualiser pendant qu'on les enregistre),
-    // donc on les retire de la liste. Filtre par nom — à étendre si d'autres
-    // logiciels de caméra virtuelle sont utilisés en salle.
-    const IS_VIRTUAL = /virtual|obs|vcam|streamlabs|xsplit|manycam|\bndi\b/i;
-    const CAMERAS = DEVICES.filter(
-        (d) => !IS_SCREEN.test(d.name) && IS_VIRTUAL.test(d.name)
-    ).map((d) => ({ id: d.id, name: d.name, kind: 'camera' }));
     // Webcams de la scène : toutes les caméras, physiques comprises. Leur
     // aperçu passe par l'image assemblée par ffmpeg, donc leur exclusivité
     // sous Windows n'est plus un obstacle.
     const WEBCAMS = DEVICES.filter((d) => !IS_SCREEN.test(d.name)).map(
         (d) => ({ id: d.id, name: d.name, kind: 'webcam' })
     );
-    return { screens: SCREENS, cameras: CAMERAS, webcams: WEBCAMS };
+    return { screens: SCREENS, webcams: WEBCAMS };
 }
 
-/**
- * Sélecteur d'adaptateur graphique pour ddagrab. L'adaptateur 0 garde la forme
- * courte, celle qui est éprouvée en captation.
- */
-function hwDeviceArg(adapter) {
-    return adapter ? `d3d11va:${adapter}` : 'd3d11va';
-}
-
-/**
- * Capture une image sur une sortie ddagrab donnée.
- *
- * C'est la seule façon FIABLE de savoir ce qu'un index de sortie désigne.
- * L'index DXGI ne suit ni l'ordre des écrans rapporté par Electron, ni la
- * numérotation des paramètres d'affichage Windows, ni celle des sources
- * Chromium : les trois hypothèses ont été démenties l'une après l'autre sur un
- * poste à trois écrans. On ne le déduit donc plus, on le constate — et c'est
- * l'image renvoyée ici qui sert d'étiquette dans le sélecteur.
- *
- * @returns {Promise<{outputIndex: number, width: number, height: number, thumbnail: string|null}|null>}
- */
-function probeScreenOutput(adapter, outputIndex) {
-    return new Promise((resolve) => {
-        const OUT = path.join(
-            os.tmpdir(),
-            `ebp-arena-screen-${adapter}-${outputIndex}.jpg`
-        );
-        const PROC = spawn(FFMPEG_PATH, [
-            '-hide_banner', '-y',
-            '-init_hw_device', hwDeviceArg(adapter),
-            '-filter_complex',
-            `ddagrab=output_idx=${outputIndex}:framerate=30,hwdownload,format=bgra,format=yuv420p[v]`,
-            '-map', '[v]',
-            '-frames:v', '1',
-            '-q:v', '20',
-            OUT
-        ]);
-        let stderr = '';
-        const TIMEOUT = setTimeout(() => PROC.kill(), 10000);
-        PROC.stderr.on('data', (d) => (stderr += d.toString()));
-        PROC.on('error', () => {
-            clearTimeout(TIMEOUT);
-            resolve(null);
-        });
-        PROC.on('close', (code) => {
-            clearTimeout(TIMEOUT);
-            if (code !== 0 || !fs.existsSync(OUT)) {
-                // Sans ce log, une sortie manquante dans la liste est
-                // inexplicable : c'est ici que ffmpeg dit pourquoi.
-                console.log(
-                    `[arena-capture] probe adapter ${adapter} output ${outputIndex} failed: ${(stderr.trim().split('\n').pop() || '').trim()}`
-                );
-                resolve(null);
-                return;
-            }
-            // Aucune entrée `-i` sur ce graphe : la seule ligne « Video: » est
-            // celle de la sortie, donc ses dimensions sont bien celles de
-            // l'écran capturé.
-            const MATCH = /Video:[^\n]*?(\d{3,5})x(\d{3,5})/.exec(stderr);
-            let thumbnail = null;
-            try {
-                thumbnail = `data:image/jpeg;base64,${fs
-                    .readFileSync(OUT)
-                    .toString('base64')}`;
-                fs.unlinkSync(OUT);
-            } catch (e) {
-                console.error('[arena-capture] thumbnail read failed:', e.message);
-            }
-            resolve({
-                adapter,
-                outputIndex,
-                width: MATCH ? Number(MATCH[1]) : 0,
-                height: MATCH ? Number(MATCH[2]) : 0,
-                thumbnail
-            });
-        });
-    });
-}
-
-/**
- * Écrans capturables sous Windows : une entrée par sortie ddagrab réellement
- * exploitable, avec l'image qui montre ce qu'elle contient. Les sondes sont
- * lancées en parallèle pour ne pas figer l'interface.
- * @returns {Promise<object[]>}
- */
-async function listWindowsScreens() {
-    const EXPECTED = Math.max(1, screen.getAllDisplays().length);
-    // Balayage séquentiel (adaptateur, sortie). Les sorties d'un adaptateur
-    // sont contiguës : au premier échec on passe à l'adaptateur suivant. Deux
-    // écrans peuvent très bien être sur la carte graphique et un troisième sur
-    // la sortie de la carte mère — ils ne partagent alors aucune numérotation.
-    const PROBES = [];
-    for (let adapter = 0; adapter < MAX_ADAPTERS; adapter++) {
-        for (let output = 0; output < EXPECTED; output++) {
-            const PROBE = await probeScreenOutput(adapter, output);
-            if (!PROBE) break;
-            PROBES.push(PROBE);
-        }
-        if (PROBES.length >= EXPECTED) break;
-    }
-    if (PROBES.length < EXPECTED) {
-        console.log(
-            `[arena-capture] ${PROBES.length} sortie(s) captable(s) pour ${EXPECTED} écran(s)`
-        );
-    }
-    screenThumbnails = {};
-    return PROBES.map((probe, position) => {
-        screenThumbnails[`${probe.adapter}-${probe.outputIndex}`] =
-            probe.thumbnail;
-        return {
-            // Numérotation volontairement distincte de celle de Windows :
-            // elle ne correspond pas, et prétendre le contraire a déjà coûté
-            // assez cher. C'est la vignette qui identifie l'écran.
-            id: `ddagrab-${probe.adapter}-${probe.outputIndex}`,
-            name: `Sortie ${position + 1} (${probe.width}×${probe.height})`,
-            kind: 'screen',
-            adapter: probe.adapter,
-            outputIndex: probe.outputIndex,
-            width: probe.width,
-            height: probe.height,
-            thumbnail: probe.thumbnail
-        };
-    });
-}
-
-/**
- * Sources sélectionnables : écrans d'abord (la cible du mode salle depuis
- * qu'on capte le logiciel de jeu directement), caméras virtuelles ensuite
- * (montages existants encore en service).
- */
-async function listVideoDevices() {
-    const { screens, cameras, webcams } = listCaptureDevices();
-    const SCREENS =
-        process.platform === 'darwin' ? screens : await listWindowsScreens();
-    return [...SCREENS, ...cameras, SCENE_DEVICE, ...webcams];
-}
-
-/**
- * Filtres de la branche d'aperçu quand les images arrivent du GPU : on les
- * redescend en RAM, on tombe à une image toutes les deux secondes et on réduit.
- * L'ordre compte — descendre AVANT de réduire coûte le bus, réduire avant est
- * impossible sans filtre GPU supplémentaire.
- */
-function previewFilters() {
-    return `hwdownload,format=bgra,fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}`;
+/** Webcams posables dans la scène. */
+function listWebcams() {
+    return listCaptureDevices().webcams;
 }
 
 /**
@@ -522,7 +303,7 @@ function sceneOverlays() {
  * @param {number} firstInput Index de la première entrée ajoutée ici (le son,
  *   s'il existe, est l'entrée 0).
  */
-function sceneArgs(withPreview, overlays, firstInput) {
+function sceneArgs(overlays, firstInput) {
     const IS_MAC = process.platform === 'darwin';
     const ARGS = [];
     const CHAINS = [];
@@ -566,39 +347,25 @@ function sceneArgs(withPreview, overlays, firstInput) {
             `[s${i}][o${i}]overlay=${item.x}:${item.y}[s${i + 1}]`
         );
     });
-    const OUT = `[s${overlays.length}]format=yuv420p`;
-    if (withPreview) {
-        CHAINS.push(
-            `${OUT},split=2[v][p]`,
-            `[p]fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}[pv]`
-        );
-    } else {
-        CHAINS.push(`${OUT}[v]`);
-    }
+    // Seconde branche : l'aperçu (cf. buildFfmpegArgs).
+    CHAINS.push(
+        `[s${overlays.length}]format=yuv420p,split=2[v][p]`,
+        `[p]fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}[pv]`
+    );
     return [...ARGS, '-filter_complex', CHAINS.join(';'), '-map', '[v]'];
 }
 
 /**
- * @param {object} device
- * @param {boolean} withPreview  Ajoute la sortie d'aperçu. Coupé par le fusible
- *   après un échec de démarrage (cf. PREVIEW_FUSE_MS).
  * @param {object[]} overlays  Éléments de la scène (cf. sceneOverlays).
  */
-function buildFfmpegArgs(device, withPreview, overlays = []) {
-    const IS_MAC = process.platform === 'darwin';
+function buildFfmpegArgs(overlays) {
     const SPOOL = getSpoolFolder();
-    const IS_SCREEN = device.kind === 'screen';
-    const IS_SCENE = device.kind === 'scene';
-    // Pas d'audio : ni la caméra virtuelle ni ddagrab n'en transportent. Le son
-    // fera l'objet d'une entrée séparée (capture par processus).
     const ENCODER = resolveEncoder();
-    // Le son n'existe que sur les chemins écran et scène de Windows : le
-    // loopback est une API Windows, et le chemin caméra est transitoire (montages existants) —
-    // on ne touche pas à sa ligne de commande, qui fonctionne.
-    const WITH_AUDIO = (IS_SCREEN || IS_SCENE) && process.platform === 'win32';
-    // Entrée audio EN PREMIER : la vidéo du chemin écran vient d'un
-    // filtergraph sans `-i`, donc le tube est l'entrée 0 et `-map 0:a` est
-    // stable quel que soit l'encodeur retenu.
+    // Le son n'existe que sous Windows : le loopback par processus est une API
+    // Windows (macOS ne sert qu'au développement).
+    const WITH_AUDIO = process.platform === 'win32';
+    // Entrée audio EN PREMIER : la vidéo vient d'un filtergraph, donc le tube
+    // est l'entrée 0 et `-map 0:a` est stable quel que soit l'encodeur retenu.
     const AUDIO_INPUT = WITH_AUDIO
         ? [
               '-f', 's16le',
@@ -610,112 +377,10 @@ function buildFfmpegArgs(device, withPreview, overlays = []) {
     const AUDIO_OUTPUT = WITH_AUDIO
         ? ['-map', '0:a', '-c:a', 'aac', '-b:a', '128k']
         : [];
-    let inputArgs;
-    // Images matérielles : `-pix_fmt` n'a pas de sens dessus, c'est l'encodeur
-    // qui convertit. Renseigné par les branches logicielles uniquement.
-    let pixFmtArgs = ['-pix_fmt', 'yuv420p'];
-    if (IS_SCENE) {
-        inputArgs = sceneArgs(withPreview, overlays, WITH_AUDIO ? 1 : 0);
-    } else if (IS_SCREEN && !IS_MAC && ENCODER.name === 'h264_nvenc') {
-        // Chemin ZÉRO-COPIE : les images restent sur le GPU de ddagrab jusqu'à
-        // NVENC, sans jamais passer en RAM.
-        //
-        // Ce n'est pas qu'une optimisation, c'est le seul montage qui marche :
-        // avec `hwdownload`, ffmpeg passe quand même le device D3D11 à
-        // l'encodeur, qui ouvre sa session dessus puis tente d'allouer des
-        // tampons système — NVENC refuse (CreateInputBuffer, invalid param).
-        const FILTERS = [
-            `ddagrab=output_idx=${device.outputIndex || 0}:framerate=${OUTPUT_FPS}`
-        ];
-        if (device.width !== 1920 || device.height !== 1080) {
-            // Redimensionnement sur GPU : redescendre en RAM pour un scale
-            // logiciel ramènerait le problème ci-dessus.
-            FILTERS.push('hwmap=derive_device=cuda', 'scale_cuda=1920:1080');
-        }
-        // La branche d'aperçu se détache APRÈS le traitement GPU et redescend
-        // seule en RAM : le chemin de l'encodeur reste intégralement sur GPU,
-        // c'est ce qui doit préserver NVENC. Le fusible est là pour le cas où.
-        const GRAPH = withPreview
-            ? `${FILTERS.join(',')},split=2[v][p];[p]${previewFilters()}[pv]`
-            : `${FILTERS.join(',')}[v]`;
-        inputArgs = [
-            '-init_hw_device', hwDeviceArg(device.adapter),
-            '-filter_complex', GRAPH,
-            '-map', '[v]'
-        ];
-        pixFmtArgs = [];
-    } else if (IS_SCREEN && !IS_MAC) {
-        // Windows sans NVENC (QSV, AMF, libx264). ddagrab est une SOURCE de
-        // filtergraph, pas un format d'entrée — il n'y a donc aucun `-i`, et
-        // c'est `-filter_complex` qui produit le flux.
-        //
-        // `hwdownload` ramène les images en RAM pour un encodeur logiciel.
-        // Coût réel (BGRA 1080p30 ≈ 240 Mo/s sur le bus), mais sans
-        // alternative pour ces encodeurs. Chemin NON TESTÉ : les PC de salle
-        // rencontrés jusqu'ici sont tous en NVENC.
-        const FILTERS = [
-            `ddagrab=output_idx=${device.outputIndex || 0}:framerate=${OUTPUT_FPS}`,
-            'hwdownload',
-            'format=bgra'
-        ];
-        // L'analyseur travaille en coordonnées 1920×1080 absolues. Un écran
-        // plus grand est réduit ; un écran plus petit est refusé en amont
-        // (startCapture) — pas d'upscale, décision Antoine.
-        if (device.width !== 1920 || device.height !== 1080) {
-            FILTERS.push('scale=1920:1080');
-        }
-        // `format=bgra` est imposé par hwdownload (format des textures) ; la
-        // conversion vers l'espace attendu par l'encodeur est explicite pour
-        // ne pas dépendre de l'auto-insertion de ffmpeg.
-        FILTERS.push('format=yuv420p');
-        // Images déjà en RAM sur ce chemin : la branche d'aperçu ne coûte
-        // qu'une réduction.
-        const GRAPH = withPreview
-            ? `${FILTERS.join(',')},split=2[v][p];[p]fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}[pv]`
-            : `${FILTERS.join(',')}[v]`;
-        inputArgs = [
-            '-init_hw_device', 'd3d11va=dda',
-            '-filter_hw_device', 'dda',
-            '-filter_complex', GRAPH,
-            '-map', '[v]'
-        ];
-    } else if (IS_SCREEN) {
-        // macOS (dev) : avfoundation expose les écrans comme des
-        // périphériques. Pas de contrôle de format ici — sur un écran qui
-        // n'est pas en 16/9 (les portables Apple sont en 16/10), l'image sera
-        // déformée. Acceptable pour du dev, refusé sous Windows.
-        inputArgs = [
-            '-f', 'avfoundation',
-            '-framerate', String(OUTPUT_FPS),
-            '-i', `${device.id}:none`,
-            '-vf', 'scale=1920:1080'
-        ];
-    } else if (IS_MAC) {
-        inputArgs = [
-            '-f', 'avfoundation',
-            '-framerate', String(detectedMode ? detectedMode.fps : 30),
-            ...(detectedMode
-                ? ['-video_size', `${detectedMode.width}x${detectedMode.height}`]
-                : []),
-            '-i', `${device.id}:none`
-        ];
-    } else {
-        inputArgs = [
-            '-f', 'dshow',
-            '-rtbufsize', '512M',
-            '-i', `video=${device.id}`
-        ];
-    }
-    const ENCODER_ARGS = ENCODER.args;
-    // Les chemins ddagrab produisent leur flux par `-filter_complex` : l'aperçu
-    // y est un label du graphe. Les autres ont un `-i`, l'aperçu s'y filtre
-    // directement sur sa propre sortie.
-    const USES_FILTER_GRAPH = IS_SCENE || (IS_SCREEN && !IS_MAC);
-    // Sortie en CFR : les caméras (surtout virtuelles) livrent des timestamps
-    // irréguliers qui, sans ça, produisent un temps média ≠ temps réel (fps
-    // annoncés délirants, frames dupliquées) — ce qui fausse la durée des
-    // segments (le muxer segmente sur le temps média) et tout le mapping
-    // temporel du pipeline.
+    // Sortie en CFR : la capture de fenêtre et les webcams livrent des
+    // timestamps irréguliers qui, sans ça, produisent un temps média ≠ temps
+    // réel — ce qui fausse la durée des segments (le muxer segmente sur le
+    // temps média) et tout le mapping temporel du pipeline.
     return [
         '-hide_banner',
         // Progression toutes les 100 ms au lieu de 500 : c'est cette ligne qui
@@ -723,49 +388,39 @@ function buildFfmpegArgs(device, withPreview, overlays = []) {
         // commencer. Sa période est l'imprécision résiduelle de la synchro.
         ...(WITH_AUDIO ? ['-stats_period', '0.1'] : []),
         ...AUDIO_INPUT,
-        ...inputArgs,
+        ...sceneArgs(overlays, WITH_AUDIO ? 1 : 0),
         ...AUDIO_OUTPUT,
-        ...ENCODER_ARGS,
+        ...ENCODER.args,
         '-fps_mode', 'cfr',
         '-r', String(OUTPUT_FPS),
         // GOP = 1 s (cf. ENCODER_ARGS) : keyframe à chaque seconde pour un
         // seek fluide côté web ET une découpe stream-copy précise à ±1 s.
         '-g', String(OUTPUT_FPS),
-        ...pixFmtArgs,
+        '-pix_fmt', 'yuv420p',
         '-f', 'segment',
         '-segment_time', String(SEGMENT_SECONDS),
         '-reset_timestamps', '1',
         '-strftime', '1',
         path.join(SPOOL, 'rec_%Y%m%d-%H%M%S.mkv'),
-        // Seconde sortie : une image unique réécrite en boucle (`-update 1`).
-        // Sur les chemins filtergraph elle vient du label [pv] produit par le
-        // split ; sur les chemins à `-i` (caméras, écran macOS) les images sont
-        // déjà en RAM et le filtre se pose directement sur cette sortie.
-        ...(withPreview
-            ? [
-                  ...(USES_FILTER_GRAPH
-                      ? ['-map', '[pv]']
-                      : ['-map', '0:v', '-vf', `fps=${PREVIEW_FPS},scale=${PREVIEW_WIDTH}:-1,${FREEZE_FILTER}`]),
-                  '-f', 'image2',
-                  '-update', '1',
-                  '-y',
-                  getPreviewPath()
-              ]
-            : [])
+        // Seconde sortie : une image unique réécrite en boucle (`-update 1`),
+        // le label [pv] du filtergraph. C'est l'aperçu de l'éditeur de scène et
+        // de l'admin à distance.
+        '-map', '[pv]',
+        '-f', 'image2',
+        '-update', '1',
+        '-y',
+        getPreviewPath()
     ];
 }
 
 /**
- * Démarre la captation sur le périphérique configuré. No-op si déjà en cours
- * ou si aucun périphérique n'est configuré.
+ * Démarre la captation. Sous Windows, elle attend d'abord que le jeu soit
+ * ouvert (cf. waitForGame), puis ffmpeg filme sa fenêtre. No-op si déjà en
+ * cours.
+ * @param {boolean} gameFound Vrai quand waitForGame vient de trouver le jeu.
  */
 function startCapture(gameFound = false) {
     if (ffmpegProcess) return getStatus();
-    const DEVICE = getDevice();
-    if (!DEVICE || !DEVICE.id) {
-        lastError = 'no_device';
-        return getStatus();
-    }
 
     const SPOOL = getSpoolFolder();
     if (!fs.existsSync(SPOOL)) fs.mkdirSync(SPOOL, { recursive: true });
@@ -773,92 +428,32 @@ function startCapture(gameFound = false) {
     stopRequested = false;
     lastError = null;
     stderrTail = [];
-    resolutionRejected = false;
     videoStarted = false;
 
-    // Scène : rien à filmer tant que le jeu n'est pas ouvert. La captation est
-    // armée et ffmpeg démarre dès que sa fenêtre apparaît. Sur macOS (dev), le
-    // jeu n'est pas détectable et l'écran le remplace : on démarre tout de suite.
-    const WAITS_FOR_GAME =
-        DEVICE.kind === 'scene' && process.platform === 'win32';
+    // Rien à filmer tant que le jeu n'est pas ouvert : la captation est armée
+    // et ffmpeg démarre dès que sa fenêtre apparaît. Sur macOS (dev), le jeu
+    // n'est pas détectable et l'écran le remplace : on démarre tout de suite.
+    const WAITS_FOR_GAME = process.platform === 'win32';
     if (WAITS_FOR_GAME && !gameFound) {
         waitForGame();
         return getStatus();
     }
 
-    // Les index avfoundation ne sont PAS stables (un iPhone en continuité ou
-    // une webcam débranchée décale tout) : on re-résout l'index par le NOM à
-    // chaque démarrage. Windows/dshow adresse déjà par nom, rien à faire.
-    let resolvedDevice = DEVICE;
-    if (process.platform === 'darwin' && DEVICE.kind !== 'scene') {
-        const { screens, cameras } = listCaptureDevices();
-        const MATCH = [...screens, ...cameras].find(
-            (d) => d.name === DEVICE.name
-        );
-        if (!MATCH) {
-            lastError = `device_not_found: ${DEVICE.name}`;
-            console.error('[arena-capture]', lastError);
-            return getStatus();
-        }
-        resolvedDevice = MATCH;
-    } else if (
-        DEVICE.kind === 'screen' &&
-        (typeof DEVICE.outputIndex !== 'number' ||
-            typeof DEVICE.adapter !== 'number')
-    ) {
-        // Source enregistrée par une version antérieure : son index de sortie
-        // était déduit d'une autre énumération, donc faux. Démarrer dessus
-        // enregistrerait un autre écran en silence — on refuse et on demande
-        // une nouvelle sélection.
-        lastError = `screen_stale: ${DEVICE.name} — rafraîchissez la liste des sources`;
-        console.error('[arena-capture]', lastError);
-        return getStatus();
-    }
-
-    // Pas d'upscale (décision Antoine) : un écran plus petit que 1080p ne peut
-    // pas alimenter l'analyseur, qui raisonne en coordonnées 1920×1080.
-    // Le format doit aussi être du 16/9 : réduire un écran 16/10 vers 1080p
-    // déformerait l'image, et l'ajouter en letterbox décalerait toutes les
-    // coordonnées de l'analyseur. Les deux cassent l'analyse en silence, donc
-    // on refuse plutôt que de produire des vidéos inexploitables.
-    if (resolvedDevice.kind === 'screen' && resolvedDevice.width) {
-        const { width: WIDTH, height: HEIGHT } = resolvedDevice;
-        if (WIDTH < 1920 || HEIGHT < 1080) {
-            resolutionRejected = true;
-            lastError = `not_1080p: écran ${WIDTH}x${HEIGHT} (1920x1080 minimum requis)`;
-        } else if (Math.abs(WIDTH / HEIGHT - 16 / 9) > 0.01) {
-            resolutionRejected = true;
-            lastError = `not_16_9: écran ${WIDTH}x${HEIGHT} (format 16/9 requis)`;
-        }
-        if (resolutionRejected) {
-            console.error('[arena-capture]', lastError);
-            return getStatus();
-        }
-    }
-
     // Le tube doit écouter AVANT que ffmpeg tente de l'ouvrir.
-    if (
-        (resolvedDevice.kind === 'screen' || resolvedDevice.kind === 'scene') &&
-        process.platform === 'win32'
-    ) {
+    if (process.platform === 'win32') {
         arenaAudioService.start();
     }
 
-    const WITH_PREVIEW = !previewDisabled;
-    const OVERLAYS = resolvedDevice.kind === 'scene' ? sceneOverlays() : [];
+    const OVERLAYS = sceneOverlays();
     const WITH_WEBCAM = OVERLAYS.some((o) => o.kind === 'webcam');
-    const ARGS = buildFfmpegArgs(resolvedDevice, WITH_PREVIEW, OVERLAYS);
-    console.log(
-        `[arena-capture] starting on "${resolvedDevice.name}" (${resolvedDevice.kind || 'camera'}): ${FFMPEG_PATH} ${ARGS.join(' ')}`
-    );
+    const ARGS = buildFfmpegArgs(OVERLAYS);
+    console.log(`[arena-capture] starting: ${FFMPEG_PATH} ${ARGS.join(' ')}`);
     const PROC = spawn(FFMPEG_PATH, ARGS, { stdio: ['pipe', 'ignore', 'pipe'] });
     ffmpegProcess = PROC;
     startedAt = Date.now();
-    const STARTED_AT = startedAt;
     // La captation vient de passer active : battement anticipé vers le backend.
     arenaModeService.notifyChange();
 
-    let resolutionChecked = false;
     // La première image ne commande PLUS l'envoi du son : ffmpeg n'ouvre son
     // muxer qu'une fois que chacun de ses flux a produit un paquet, donc il
     // n'annonce jamais d'image tant qu'il n'a pas reçu de son (cf.
@@ -920,9 +515,7 @@ function startCapture(gameFound = false) {
             }
         }
         for (const FREEZE of LINE.match(/freeze_(start|end): [\d.]+/g) || []) {
-            console.warn(
-                `[arena-capture] image figée sur "${resolvedDevice.name}" — ${FREEZE}`
-            );
+            console.warn(`[arena-capture] image figée — ${FREEZE}`);
         }
         // La progression sort dix fois par seconde : la laisser entrer dans le
         // tail noierait le diagnostic qu'on y cherche en cas de mort.
@@ -945,23 +538,6 @@ function startCapture(gameFound = false) {
                 );
             }
         }
-        // Contrôle strict 1080p sur la première ligne de stream vidéo (l'input
-        // apparaît avant l'output dans le banner ffmpeg) : source ≠ 1920×1080
-        // → arrêt immédiat avec erreur, sans redémarrage automatique. Sans
-        // objet pour un écran : sa définition est validée avant le démarrage,
-        // et la mise à l'échelle vers 1080p est délibérée.
-        if (!resolutionChecked && resolvedDevice.kind !== 'screen') {
-            const M = LINE.match(/Video:.*?(\d{3,4})x(\d{3,4})/);
-            if (M) {
-                resolutionChecked = true;
-                if (M[1] !== '1920' || M[2] !== '1080') {
-                    resolutionRejected = true;
-                    lastError = `not_1080p: source ${M[1]}x${M[2]} (1920x1080 requis)`;
-                    console.error('[arena-capture]', lastError);
-                    PROC.kill('SIGINT');
-                }
-            }
-        }
     });
 
     PROC.on('error', (e) => {
@@ -982,11 +558,7 @@ function startCapture(gameFound = false) {
             console.log('[arena-capture] stopped');
             return;
         }
-        // Source refusée (≠ 1080p) : pas de redémarrage automatique — l'erreur
-        // reste affichée jusqu'à ce que la source soit corrigée et la captation
-        // relancée manuellement.
-        if (resolutionRejected) return;
-        // Scène : ffmpeg s'arrête aussi quand le jeu se ferme (passage
+        // ffmpeg s'arrête aussi quand le jeu se ferme (passage
         // d'After-H à Color Chaos, plantage). Ce n'est pas une panne : on se
         // remet en attente de sa fenêtre, sans backoff ni fusible.
         if (!WAITS_FOR_GAME) {
@@ -1017,8 +589,7 @@ function startCapture(gameFound = false) {
         // Webcam de la scène : la source la plus fragile (débranchée, prise
         // par un autre logiciel), et optionnelle. Sa perte ne doit jamais
         // coûter l'enregistrement du jeu : on relance aussitôt sans elle, et
-        // on la réintègre quand elle réapparaît. Testé AVANT le mode imposé et
-        // le fusible d'aperçu, qui lui attribueraient sinon l'échec.
+        // on la réintègre quand elle réapparaît.
         if (WITH_WEBCAM) {
             webcamSuspended = true;
             console.warn(
@@ -1028,51 +599,7 @@ function startCapture(gameFound = false) {
             startCapture();
             return;
         }
-        // Mode refusé par le périphérique : ffmpeg vient de logger la liste des
-        // modes supportés → on adopte le premier S'IL est en 1080p et on
-        // relance immédiatement (une seule fois par mode pour ne pas boucler).
-        // Un périphérique qui ne propose pas de 1080p est refusé net.
-        const SUPPORTED = parseSupportedMode(stderrTail);
-        if (SUPPORTED && (SUPPORTED.width !== 1920 || SUPPORTED.height !== 1080)) {
-            resolutionRejected = true;
-            lastError = `not_1080p: le périphérique propose ${SUPPORTED.width}x${SUPPORTED.height} (1920x1080 requis)`;
-            console.error('[arena-capture]', lastError);
-            return;
-        }
-        if (
-            SUPPORTED &&
-            (!detectedMode || detectedMode.fps !== SUPPORTED.fps)
-        ) {
-            detectedMode = SUPPORTED;
-            console.log(
-                `[arena-capture] device imposes ${SUPPORTED.width}x${SUPPORTED.height}@${SUPPORTED.fps} — restarting with it`
-            );
-            startCapture();
-            return;
-        }
-        // FUSIBLE de l'aperçu, en DERNIER recours : on n'arrive ici qu'une fois
-        // les causes connues écartées (arrêt volontaire, résolution refusée,
-        // mode imposé par le périphérique). Une mort prématurée avec l'aperçu
-        // actif désigne alors le filtergraph — un graphe refusé échoue au
-        // démarrage, pas après une heure. On coupe l'aperçu pour la session et
-        // on relance sans attendre le backoff : la salle ne doit pas perdre
-        // d'enregistrement le temps qu'on comprenne.
-        // Sans objet pour la scène, dont l'aperçu est pris en RAM après
-        // l'assemblage : une mort précoce y vient de la fenêtre ou de la webcam.
-        if (
-            WITH_PREVIEW &&
-            resolvedDevice.kind !== 'scene' &&
-            Date.now() - STARTED_AT < PREVIEW_FUSE_MS
-        ) {
-            previewDisabled = true;
-            lastError = null;
-            console.warn(
-                `[arena-capture] ffmpeg a échoué avec la sortie d'aperçu — relance sans aperçu —\n${stderrTail.join('\n')}`
-            );
-            startCapture();
-            return;
-        }
-        // Mort inattendue (device débranché, erreur d'encodage…) : on garde le
+        // Mort inattendue (fenêtre inaccessible, erreur d'encodage…) : on garde le
         // diagnostic et on relance avec backoff — la captation d'une salle ne
         // doit jamais rester morte en silence.
         lastError = stderrTail.slice(-3).join(' | ') || `ffmpeg exited (${code})`;
@@ -1127,27 +654,6 @@ function stopCapture() {
         } catch (_) {
             ffmpegProcess.kill('SIGINT');
         }
-    }
-    return getStatus();
-}
-
-/**
- * Sélectionne le périphérique. Ne démarre PAS la captation de lui-même : le
- * simple choix d'une source ne sert qu'à la prévisualisation. En revanche, si
- * une captation est déjà en cours, on bascule dessus sans interruption voulue
- * par l'utilisateur.
- * @param {{id: string, name: string}} device
- */
-function setDeviceAndRestart(device) {
-    console.log(
-        `[arena-capture] source choisie : "${device && device.name}" (${device && device.id})`
-    );
-    setDevice(device);
-    detectedMode = null;
-    // Redémarrage sur le nouveau périphérique une fois l'ancien arrêté — y
-    // compris depuis une scène qui attendait encore la fenêtre du jeu.
-    if (ffmpegProcess || waitingGame) {
-        restartCapture();
     }
     return getStatus();
 }
@@ -1211,7 +717,7 @@ function scheduleWebcamRetry() {
             scheduleWebcamRetry();
             return;
         }
-        const FOUND = listCaptureDevices().webcams.some((d) =>
+        const FOUND = listWebcams().some((d) =>
             process.platform === 'darwin'
                 ? d.name === WEBCAM.name
                 : d.id === WEBCAM.id
@@ -1342,31 +848,21 @@ function getSceneView() {
 }
 
 /**
- * À appeler au boot : reprend la captation si un périphérique est configuré et
- * que le mode salle est actif (l'appelant vérifie ce dernier point).
+ * À appeler au boot : reprend la captation quand le mode salle est actif
+ * (l'appelant vérifie ce point).
  */
 function autoStart() {
-    if (getDevice()) startCapture();
+    startCapture();
 }
 
 function getStatus() {
-    const DEVICE = getDevice();
     return {
-        // Une scène qui attend la fenêtre du jeu est armée : elle compte comme
-        // une captation en cours (l'arrêter reste possible).
-        running: !!ffmpegProcess || waitingGame,
+        // ffmpeg écrit réellement : le pipeline s'en sert pour savoir si le
+        // dernier segment est encore ouvert.
+        running: !!ffmpegProcess,
+        // Armée, en attente de la fenêtre du jeu : rien n'est écrit, mais la
+        // captation n'est pas arrêtée pour autant.
         waitingGame,
-        deviceId: DEVICE ? DEVICE.id : null,
-        deviceName: DEVICE ? DEVICE.name : null,
-        // L'aperçu du renderer n'ouvre pas une source écran comme une caméra.
-        deviceKind: DEVICE ? DEVICE.kind || 'camera' : null,
-        // Vignette de la sortie choisie : pour un écran, l'aperçu est cette
-        // image — captée par ddagrab, donc fidèle à ce qui est enregistré.
-        deviceThumbnail:
-            DEVICE && DEVICE.kind === 'screen'
-                ? screenThumbnails[`${DEVICE.adapter || 0}-${DEVICE.outputIndex}`] ||
-                  null
-                : null,
         // Le renderer n'envoie du PCM que si le tube attend réellement du son.
         audio: arenaAudioService.getStatus(),
         videoStarted,
@@ -1377,16 +873,14 @@ function getStatus() {
         lastError,
         spoolFolder: getSpoolFolder(),
         segmentSeconds: SEGMENT_SECONDS,
-        // Chemin de l'image d'aperçu, `null` si le fusible l'a coupée.
-        previewPath: previewDisabled ? null : getPreviewPath()
+        previewPath: getPreviewPath()
     };
 }
 
 module.exports = {
-    listVideoDevices,
+    listWebcams,
     startCapture,
     stopCapture,
-    setDeviceAndRestart,
     autoStart,
     getStatus,
     setSpoolFolder,

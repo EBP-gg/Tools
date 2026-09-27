@@ -149,7 +149,7 @@
       "urlLabel": "URL YouTube / Twitch"
     },
     "arena_mode": {
-      "intro": "Această pagină permite instalarea Tools pe PC-ul de streaming al unei săli EVA. Odată ce sala este identificată, partidele jucate în arenă sunt înregistrate automat în calitate originală, analizate și trimise către EBP.<br/><br/>La importul jocurilor, jucătorii își găsesc instantaneu videoclipurile și analizele.",
+      "intro": "Această pagină permite instalarea Tools pe PC-ul de streaming al unei săli EVA. Odată ce sala este identificată, partidele jucate în arenă sunt înregistrate automat în calitate originală și trimise către EBP.<br/><br/>La importul jocurilor, jucătorii își găsesc instantaneu jocurile și videoclipurile.",
       "roomId": "Sală",
       "arenaId": "Arenă",
       "key": "Cheie",
@@ -161,14 +161,10 @@
         "network": "Eroare de rețea, încercați din nou."
       },
       "capture": {
-        "device": "Sursă video",
         "waitingFrame": "Se așteaptă prima imagine de la sursă. Înregistrarea începe imediat ce sosește: dacă acest mesaj persistă, sursa nu produce nicio imagine.",
         "waitingGame": "Se așteaptă jocul: înregistrarea va începe imediat ce After-H sau Color Chaos este deschis.",
-        "screens": "Ecrane",
-        "cameras": "Camere virtuale",
-        "refresh": "Reîmprospătează lista",
-        "recording": "Se înregistrează de la „{{device}}”. Partidele detectate vor fi analizate și trimise automat.",
-        "stopped": "Captura este oprită. Selectați o sursă video, apoi porniți captura.",
+        "recording": "Se înregistrează. Partidele detectate vor fi analizate și trimise automat.",
+        "stopped": "Captura este oprită. Porniți-o pentru a înregistra partidele.",
         "error": "Captura s-a oprit cu o eroare:",
         "start": "Pornește captura",
         "stop": "Oprește captura",

@@ -2770,19 +2770,14 @@ if (!APP_GOT_THE_LOCK) {
             return arenaModeService.unregister();
         });
 
-        // The front-end asks the server to list video capture devices.
-        ipcMain.handle('arena-capture-list-devices', () => {
-            return arenaCaptureService.listVideoDevices();
+        // The front-end asks the server to list the webcams usable in the scene.
+        ipcMain.handle('arena-capture-list-webcams', () => {
+            return arenaCaptureService.listWebcams();
         });
 
         // The front-end asks the server to return the capture status.
         ipcMain.handle('arena-capture-get-status', () => {
             return arenaCaptureService.getStatus();
-        });
-
-        // The front-end asks the server to select a device (preview only; capture is not started).
-        ipcMain.handle('arena-capture-set-device', (event, device) => {
-            return arenaCaptureService.setDeviceAndRestart(device);
         });
 
         // The front-end asks the server to move the arena working folder
@@ -2791,7 +2786,9 @@ if (!APP_GOT_THE_LOCK) {
         // sont DÉPLACÉS pour ne rien perdre, puis pipeline et uploader sont
         // redémarrés sur le nouvel emplacement.
         ipcMain.handle('arena-move-folder', async () => {
-            if (arenaCaptureService.getStatus().running) {
+            // En attente du jeu, la captation démarrerait dans l'ancien dossier.
+            const CAPTURE = arenaCaptureService.getStatus();
+            if (CAPTURE.running || CAPTURE.waitingGame) {
                 return { success: false, error: 'capture_running' };
             }
             const RES = await dialog.showOpenDialog(getMainWindow(), {
@@ -2904,10 +2901,9 @@ if (!APP_GOT_THE_LOCK) {
         // The front-end polls the image actually recorded (scene included).
         ipcMain.handle('arena-capture-preview', () => {
             const STATUS = arenaCaptureService.getStatus();
-            // En attente du jeu, le fichier est celui d'une captation passée.
-            if (!STATUS.running || STATUS.waitingGame || !STATUS.previewPath) {
-                return null;
-            }
+            // Arrêtée ou en attente du jeu : le fichier est celui d'une
+            // captation passée.
+            if (!STATUS.running) return null;
             try {
                 return `data:image/jpeg;base64,${fs
                     .readFileSync(STATUS.previewPath)

@@ -149,7 +149,7 @@
       "urlLabel": "URL do YouTube / Twitch"
     },
     "arena_mode": {
-      "intro": "Esta página permite instalar o Tools no PC de streaming de uma sala EVA. Depois de a sala ser identificada, as partidas jogadas na arena são gravadas automaticamente em qualidade original, analisadas e enviadas para o EBP.<br/><br/>Ao importar os seus jogos, os jogadores encontram instantaneamente os seus vídeos e as suas análises.",
+      "intro": "Esta página permite instalar o Tools no PC de streaming de uma sala EVA. Depois de a sala ser identificada, as partidas jogadas na arena são gravadas automaticamente em qualidade original e enviadas para o EBP.<br/><br/>Ao importar os seus jogos, os jogadores encontram instantaneamente os seus jogos e os seus vídeos.",
       "roomId": "Sala",
       "arenaId": "Arena",
       "key": "Chave",
@@ -161,14 +161,10 @@
         "network": "Erro de rede, tente novamente."
       },
       "capture": {
-        "device": "Fonte de vídeo",
         "waitingFrame": "A aguardar a primeira imagem da fonte. A gravação começa assim que chegar: se esta mensagem persistir, a fonte não produz qualquer imagem.",
         "waitingGame": "À espera do jogo: a gravação começa assim que After-H ou Color Chaos estiver aberto.",
-        "screens": "Ecrãs",
-        "cameras": "Câmaras virtuais",
-        "refresh": "Atualizar a lista",
-        "recording": "A gravar a partir de «{{device}}». As partidas detetadas serão analisadas e enviadas automaticamente.",
-        "stopped": "A captação está parada. Selecione uma fonte de vídeo e inicie a captação.",
+        "recording": "A gravar. As partidas detetadas serão analisadas e enviadas automaticamente.",
+        "stopped": "A captação está parada. Inicie-a para gravar as partidas.",
         "error": "A captação parou com um erro:",
         "start": "Iniciar a captação",
         "stop": "Parar a captação",

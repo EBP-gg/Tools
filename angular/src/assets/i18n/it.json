@@ -149,7 +149,7 @@
       "urlLabel": "URL YouTube / Twitch"
     },
     "arena_mode": {
-      "intro": "Questa pagina consente di installare Tools sul PC di streaming di una sala EVA. Una volta identificata la sala, le partite giocate nell'arena vengono registrate automaticamente in qualità originale, analizzate e inviate a EBP.<br/><br/>Al momento dell'importazione, i giocatori trovano immediatamente i loro video e le loro analisi.",
+      "intro": "Questa pagina consente di installare Tools sul PC di streaming di una sala EVA. Una volta identificata la sala, le partite giocate nell'arena vengono registrate automaticamente in qualità originale e inviate a EBP.<br/><br/>Al momento dell'importazione, i giocatori trovano immediatamente le loro partite e i loro video.",
       "roomId": "Sala",
       "arenaId": "Arena",
       "key": "Chiave",
@@ -161,14 +161,10 @@
         "network": "Errore di rete, riprova."
       },
       "capture": {
-        "device": "Sorgente video",
         "waitingFrame": "In attesa della prima immagine dalla sorgente. La registrazione inizia appena arriva: se questo messaggio persiste, la sorgente non produce alcuna immagine.",
         "waitingGame": "In attesa del gioco: la registrazione partirà non appena After-H o Color Chaos sarà aperto.",
-        "screens": "Schermi",
-        "cameras": "Fotocamere virtuali",
-        "refresh": "Aggiorna l'elenco",
-        "recording": "Registrazione in corso da «{{device}}». Le partite rilevate saranno analizzate e inviate automaticamente.",
-        "stopped": "L'acquisizione è ferma. Seleziona una sorgente video e avvia l'acquisizione.",
+        "recording": "Registrazione in corso. Le partite rilevate saranno analizzate e inviate automaticamente.",
+        "stopped": "L'acquisizione è ferma. Avviala per registrare le partite.",
         "error": "L'acquisizione si è fermata con un errore:",
         "start": "Avvia l'acquisizione",
         "stop": "Ferma l'acquisizione",

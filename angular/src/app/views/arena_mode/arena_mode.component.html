@@ -6,198 +6,196 @@ See LICENSE for terms. Unauthorized use is prohibited.
 
 @if (state) {
   @if (state.registered) {
-    <!-- Tools Virtual Scene : la fenêtre du jeu en plein cadre, webcam et
-          images par-dessus. Assemblée par ffmpeg, donc enregistrée telle
-          quelle. N'existe que si cette source est choisie. -->
-    @if (captureStatus?.deviceKind === 'scene') {
-      <div class="flex gap-3">
-        <div class="flex gap-3 flex-col relative z-1">
-          <button
-            type="button"
-            class="squared"
-            matTooltipPosition="above"
-            matTooltip="{{ 'view.arena_mode.scene.chooseWebcam' | translate }}"
-            cdkOverlayOrigin
-            #webcamOrigin="cdkOverlayOrigin"
-            (click)="webcamPickerOpen = true"
-          >
-            <i class="fa-sharp fa-solid fa-camera-web"></i>
-          </button>
-          <ng-template
-            cdkConnectedOverlay
-            [cdkConnectedOverlayOrigin]="webcamOrigin"
-            [cdkConnectedOverlayOpen]="webcamPickerOpen"
-            [cdkConnectedOverlayPositions]="webcamPickerPositions"
-            cdkConnectedOverlayHasBackdrop
-            cdkConnectedOverlayBackdropClass="cdk-overlay-dark-backdrop"
-            (backdropClick)="webcamPickerOpen = false"
-            (detach)="webcamPickerOpen = false"
-          >
-            <mat-form-field class="webcam w-100! ml-3">
-              <mat-select
-                [(ngModel)]="selectedWebcamId"
-                [ngModelOptions]="{ standalone: true }"
-                (selectionChange)="onWebcamChange()"
-              >
-                <mat-option value="">{{
-                  'view.arena_mode.scene.noWebcam' | translate
-                }}</mat-option>
-                @for (option of webcamOptions; track option.device.id) {
-                  <mat-option [value]="option.device.id">{{
-                    option.label
-                  }}</mat-option>
-                }
-              </mat-select>
-            </mat-form-field>
-          </ng-template>
-          <button
-            type="button"
-            class="squared"
-            (click)="addSceneImage()"
-            matTooltipPosition="right"
-            matTooltip="{{ 'view.arena_mode.scene.addImage' | translate }}"
-          >
-            <i class="fa-sharp fa-solid fa-image"></i>
-          </button>
-          <button
-            type="button"
-            class="squared mt-auto"
-            [disabled]="!sceneDirty"
-            (click)="cancelScene()"
-            matTooltipPosition="right"
-            matTooltip="{{ 'view.arena_mode.scene.cancel' | translate }}"
-          >
-            <i class="fa-sharp fa-solid fa-xmark"></i>
-          </button>
-          <button
-            type="button squared"
-            class="green"
-            [disabled]="!sceneDirty"
-            (click)="applyScene()"
-            matTooltipPosition="right"
-            matTooltip="{{ 'view.arena_mode.scene.apply' | translate }}"
-          >
-            <i class="fa-sharp fa-solid fa-floppy-disk mr-0"></i>
-          </button>
-        </div>
-        <div
-          #sceneStage
-          class="scene-stage relative"
-          (pointermove)="onSceneDrag($event)"
-          (pointerup)="endSceneDrag()"
-          (pointercancel)="endSceneDrag()"
-        >
-          @if (sceneBackground) {
-            <img class="scene-background" [src]="sceneBackground" />
-          }
-          <!-- Zones lues par l'analyseur (HUD) : rien ne doit les recouvrir. -->
-          <img class="scene-hmi" src="/assets/img/red_hmi_area.png" />
-          @if (scene.webcam) {
-            <div
-              class="scene-item scene-webcam"
-              [style.left.%]="(scene.webcam.x / 1920) * 100"
-              [style.top.%]="(scene.webcam.y / 1080) * 100"
-              [style.width.%]="(scene.webcam.width / 1920) * 100"
-              [style.height.%]="(scene.webcam.height / 1080) * 100"
-              (pointerdown)="startSceneDrag($event, scene.webcam, 'move')"
-            >
-              <i class="fa-sharp fa-solid fa-video"></i>
-              <span
-                class="scene-handle"
-                (pointerdown)="startSceneDrag($event, scene.webcam, 'resize')"
-              ></span>
-            </div>
-          }
-          @for (image of scene.images; track image.file) {
-            <div
-              class="scene-item"
-              [style.left.%]="(image.x / 1920) * 100"
-              [style.top.%]="(image.y / 1080) * 100"
-              [style.width.%]="(image.width / 1920) * 100"
-              [style.height.%]="(image.height / 1080) * 100"
-              (pointerdown)="startSceneDrag($event, image, 'move')"
-            >
-              <img [src]="sceneImageUrls[image.file]" draggable="false" />
-              <span
-                class="scene-remove"
-                (pointerdown)="$event.stopPropagation()"
-                (click)="removeSceneImage(image.file)"
-                matTooltip="{{
-                  'view.arena_mode.scene.removeImage' | translate
-                }}"
-              >
-                <i class="fa-sharp fa-solid fa-xmark"></i>
-              </span>
-              <span
-                class="scene-handle"
-                (pointerdown)="startSceneDrag($event, image, 'resize')"
-              ></span>
-            </div>
-          }
-        </div>
-      </div>
-
-      <ebp-message class="mt-3">
-        {{ 'view.arena_mode.scene.help' | translate }}
-      </ebp-message>
-      @if (captureStatus?.webcamSuspended) {
-        <ebp-message state="error">
-          {{ 'view.arena_mode.scene.webcamSuspended' | translate }}
-        </ebp-message>
-      }
-    }
-    <!-- Captation : source vidéo (caméra virtuelle) → segments spool -->
-    <div class="box mt-3">
-      <div class="d-flex">
-        <mat-form-field class="mr-1">
-          <mat-label>{{
-            'view.arena_mode.capture.device' | translate
-          }}</mat-label>
-          <mat-select
-            [(ngModel)]="selectedDeviceId"
-            [ngModelOptions]="{ standalone: true }"
-            (selectionChange)="applyDevice()"
-          >
-            @if (screenDevices.length) {
-              <mat-optgroup
-                [label]="'view.arena_mode.capture.screens' | translate"
-              >
-                @for (device of screenDevices; track device.id) {
-                  <mat-option [value]="device.id">{{ device.name }}</mat-option>
-                }
-              </mat-optgroup>
-            }
-            @if (cameraDevices.length) {
-              <mat-optgroup
-                [label]="'view.arena_mode.capture.cameras' | translate"
-              >
-                @for (device of cameraDevices; track device.id) {
-                  <mat-option [value]="device.id">{{ device.name }}</mat-option>
-                }
-              </mat-optgroup>
-            }
-          </mat-select>
-        </mat-form-field>
+    <!-- Tools Virtual Scene, seule source : la fenêtre du jeu en plein cadre,
+          webcam et images par-dessus. Assemblée par ffmpeg, donc enregistrée
+          telle quelle. -->
+    <div class="flex gap-3">
+      <div class="flex gap-3 flex-col relative z-1">
         <button
           type="button"
-          class="squared mr-1"
-          (click)="refreshDevices()"
-          matTooltip="{{ 'view.arena_mode.capture.refresh' | translate }}"
+          class="squared"
+          matTooltipPosition="above"
+          matTooltip="{{ 'view.arena_mode.scene.chooseWebcam' | translate }}"
+          cdkOverlayOrigin
+          #webcamOrigin="cdkOverlayOrigin"
+          (click)="openWebcamPicker()"
         >
-          <i class="fa-sharp fa-solid fa-arrows-rotate"></i>
+          <i class="fa-sharp fa-solid fa-camera-web"></i>
+        </button>
+        <ng-template
+          cdkConnectedOverlay
+          [cdkConnectedOverlayOrigin]="webcamOrigin"
+          [cdkConnectedOverlayOpen]="webcamPickerOpen"
+          [cdkConnectedOverlayPositions]="webcamPickerPositions"
+          cdkConnectedOverlayHasBackdrop
+          cdkConnectedOverlayBackdropClass="cdk-overlay-dark-backdrop"
+          (backdropClick)="webcamPickerOpen = false"
+          (detach)="webcamPickerOpen = false"
+        >
+          <mat-form-field class="webcam w-100! ml-3">
+            <mat-select
+              [(ngModel)]="selectedWebcamId"
+              [ngModelOptions]="{ standalone: true }"
+              (selectionChange)="onWebcamChange()"
+            >
+              <mat-option value="">{{
+                'view.arena_mode.scene.noWebcam' | translate
+              }}</mat-option>
+              @for (option of webcamOptions; track option.device.id) {
+                <mat-option [value]="option.device.id">{{
+                  option.label
+                }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        </ng-template>
+        <button
+          type="button"
+          class="squared"
+          (click)="addSceneImage()"
+          matTooltipPosition="right"
+          matTooltip="{{ 'view.arena_mode.scene.addImage' | translate }}"
+        >
+          <i class="fa-sharp fa-solid fa-image"></i>
         </button>
         <button
           type="button"
-          class="squared mr-1"
+          class="squared mt-auto"
+          [disabled]="!sceneDirty"
+          (click)="cancelScene()"
+          matTooltipPosition="right"
+          matTooltip="{{ 'view.arena_mode.scene.cancel' | translate }}"
+        >
+          <i class="fa-sharp fa-solid fa-xmark"></i>
+        </button>
+        <button
+          type="button squared"
+          class="green"
+          [disabled]="!sceneDirty"
+          (click)="applyScene()"
+          matTooltipPosition="right"
+          matTooltip="{{ 'view.arena_mode.scene.apply' | translate }}"
+        >
+          <i class="fa-sharp fa-solid fa-floppy-disk mr-0"></i>
+        </button>
+      </div>
+      <div
+        #sceneStage
+        class="scene-stage relative"
+        (pointermove)="onSceneDrag($event)"
+        (pointerup)="endSceneDrag()"
+        (pointercancel)="endSceneDrag()"
+      >
+        @if (sceneBackground) {
+          <img class="scene-background" [src]="sceneBackground" />
+        }
+        <!-- Zones lues par l'analyseur (HUD) : rien ne doit les recouvrir. -->
+        <img class="scene-hmi" src="/assets/img/red_hmi_area.png" />
+        @if (scene.webcam) {
+          <div
+            class="scene-item scene-webcam"
+            [style.left.%]="(scene.webcam.x / 1920) * 100"
+            [style.top.%]="(scene.webcam.y / 1080) * 100"
+            [style.width.%]="(scene.webcam.width / 1920) * 100"
+            [style.height.%]="(scene.webcam.height / 1080) * 100"
+            (pointerdown)="startSceneDrag($event, scene.webcam, 'move')"
+          >
+            <i class="fa-sharp fa-solid fa-video"></i>
+            <span
+              class="scene-handle"
+              (pointerdown)="startSceneDrag($event, scene.webcam, 'resize')"
+            ></span>
+          </div>
+        }
+        @for (image of scene.images; track image.file) {
+          <div
+            class="scene-item"
+            [style.left.%]="(image.x / 1920) * 100"
+            [style.top.%]="(image.y / 1080) * 100"
+            [style.width.%]="(image.width / 1920) * 100"
+            [style.height.%]="(image.height / 1080) * 100"
+            (pointerdown)="startSceneDrag($event, image, 'move')"
+          >
+            <img [src]="sceneImageUrls[image.file]" draggable="false" />
+            <span
+              class="scene-remove"
+              (pointerdown)="$event.stopPropagation()"
+              (click)="removeSceneImage(image.file)"
+              matTooltip="{{ 'view.arena_mode.scene.removeImage' | translate }}"
+            >
+              <i class="fa-sharp fa-solid fa-xmark"></i>
+            </span>
+            <span
+              class="scene-handle"
+              (pointerdown)="startSceneDrag($event, image, 'resize')"
+            ></span>
+          </div>
+        }
+      </div>
+      <div class="flex gap-3 flex-col">
+        @if (captureStatus) {
+          <!-- Niveau du son du PC : l'aperçu image ne dit pas si la
+              source produit du son, et une scène muette passerait
+              inaperçue jusqu'à la relecture de la vidéo. -->
+          <div
+            class="audio"
+            matTooltipPosition="left"
+            matTooltip="{{ 'view.arena_mode.capture.audio.level' | translate }}"
+          >
+            <div class="audio-track">
+              <div #audioMeter class="audio-meter"></div>
+            </div>
+          </div>
+        }
+        <button
+          type="button"
+          class="squared mt-auto"
+          [class.red]="captureArmed"
+          [class.green]="!captureArmed"
+          [disabled]="capturePending || !captureStatus"
+          (click)="toggleCapture()"
+          matTooltipPosition="left"
+          [matTooltip]="
+            (captureArmed
+              ? 'view.arena_mode.capture.stop'
+              : 'view.arena_mode.capture.start'
+            ) | translate
+          "
+        >
+          <i
+            class="fa-sharp fa-solid"
+            [class.fa-play]="!captureArmed"
+            [class.fa-stop]="captureArmed"
+          ></i>
+        </button>
+      </div>
+    </div>
+
+    <ebp-message class="mt-3">
+      {{ 'view.arena_mode.scene.help' | translate }}
+    </ebp-message>
+    @if (captureStatus?.webcamSuspended) {
+      <ebp-message state="error">
+        {{ 'view.arena_mode.scene.webcamSuspended' | translate }}
+      </ebp-message>
+    }
+    <!-- Captation : scène → segments spool -->
+    <div class="box mt-3">
+      <div class="flex gap-3">
+        <button
+          type="button"
+          class="squared"
           (click)="openFolder()"
+          matTooltipPosition="above"
           matTooltip="{{ 'view.arena_mode.capture.openFolder' | translate }}"
         >
           <i class="fa-sharp fa-solid fa-folder-open"></i>
         </button>
         <button
           type="button"
-          class="squared mr-1"
+          class="squared"
           (click)="openLogsFolder()"
+          matTooltipPosition="above"
           matTooltip="{{
             'view.arena_mode.capture.openLogsFolder' | translate
           }}"
@@ -207,10 +205,11 @@ See LICENSE for terms. Unauthorized use is prohibited.
         <button
           type="button"
           class="squared"
-          [disabled]="captureStatus?.running"
+          [disabled]="captureArmed"
           (click)="moveFolder()"
+          matTooltipPosition="above"
           matTooltip="{{
-            (captureStatus?.running
+            (captureArmed
               ? 'view.arena_mode.capture.moveFolderStopFirst'
               : 'view.arena_mode.capture.moveFolder'
             ) | translate
@@ -218,162 +217,86 @@ See LICENSE for terms. Unauthorized use is prohibited.
         >
           <i class="fa-sharp fa-solid fa-folder-tree"></i>
         </button>
+        <button
+          type="button"
+          class="squared red"
+          (click)="unregister()"
+          matTooltipPosition="above"
+          matTooltip="{{ 'common.logout' | translate }}"
+        >
+          <i class="fa-sharp fa-solid fa-skull"></i>
+        </button>
       </div>
       @if (captureStatus) {
-        @if (captureStatus.deviceKind === 'screen') {
-          <!-- Aperçu d'un écran : l'image vient de ddagrab, exactement
-                comme l'enregistrement. Fixe, rafraîchie avec la liste. -->
-          @if (captureStatus.deviceThumbnail) {
-            <img class="preview" [src]="captureStatus.deviceThumbnail" />
-          }
-        } @else if (captureStatus.deviceKind === 'camera') {
-          <video
-            #previewVideo
-            class="preview"
-            autoplay
-            muted
-            playsinline
-          ></video>
-        }
         <!-- Niveau du son du PC : l'aperçu image ne dit pas si la
               source produit du son, et une scène muette passerait
               inaperçue jusqu'à la relecture de la vidéo. -->
-        <div class="audio">
-          <span class="audio-label">{{
-            'view.arena_mode.capture.audio.level' | translate
-          }}</span>
-          <div class="audio-track">
-            <div #audioMeter class="audio-meter"></div>
-          </div>
-          @if (audioTarget) {
-            <span class="audio-target">{{ audioTarget }}</span>
-          }
-        </div>
-        @if (captureStatus.waitingGame) {
-          <ebp-message>
-            {{ 'view.arena_mode.capture.waitingGame' | translate }}
-          </ebp-message>
-        } @else if (captureStatus.running && !captureStatus.videoStarted) {
-          <ebp-message>
-            {{ 'view.arena_mode.capture.waitingFrame' | translate }}
-          </ebp-message>
+        @if (audioTarget) {
+          <span class="audio-target">{{ audioTarget }}</span>
         }
-        @if (captureStatus.running && !captureStatus.audio.connected) {
-          <ebp-message state="error">
-            {{ 'view.arena_mode.capture.audio.notPiped' | translate }}
-          </ebp-message>
-        }
-        @if (audioState === 'silent') {
-          <ebp-message state="error">
-            {{ 'view.arena_mode.capture.audio.silent' | translate }}
-          </ebp-message>
-        } @else if (audioState === 'idle') {
-          <ebp-message>
-            {{ 'view.arena_mode.capture.audio.idle' | translate }}
-          </ebp-message>
-        } @else if (audioState === 'unavailable') {
-          <ebp-message>
-            {{ 'view.arena_mode.capture.audio.unavailable' | translate }}
-          </ebp-message>
-        }
-        @if (captureStatus.running && !captureStatus.waitingGame) {
-          <ebp-message state="success">
-            {{
-              'view.arena_mode.capture.recording'
-                | translate: { device: captureStatus.deviceName }
-            }}
-          </ebp-message>
-        } @else if (captureStatus.waitingGame) {
-          <!-- Attente du jeu : message déjà affiché plus haut. -->
-        } @else if (captureStatus.lastError) {
-          <ebp-message state="error">
-            {{ 'view.arena_mode.capture.error' | translate }}
-            <code>{{ captureStatus.lastError }}</code>
-          </ebp-message>
-        } @else {
-          <ebp-message>
-            {{ 'view.arena_mode.capture.stopped' | translate }}
-          </ebp-message>
-        }
-        <button
-          type="button"
-          class="w-100"
-          [class.red]="captureStatus.running"
-          [class.green]="!captureStatus.running"
-          [disabled]="!captureStatus.deviceId || capturePending"
-          (click)="toggleCapture()"
-        >
-          {{
-            (captureStatus.running
-              ? 'view.arena_mode.capture.stop'
-              : 'view.arena_mode.capture.start'
-            ) | translate
-          }}
-        </button>
       }
     </div>
-    <div class="box mt-3">
-      <button type="button" class="w-100 red" (click)="unregister()">
-        {{ 'common.logout' | translate }}
-      </button>
-    </div>
   } @else {
-    <ebp-message
-      class="mb-2"
-      [html]="'view.arena_mode.intro' | translate"
-    ></ebp-message>
-    <div class="box">
-      <form (submit)="register()">
-        <mat-form-field>
-          <mat-label>{{ 'view.arena_mode.roomId' | translate }}</mat-label>
-          <mat-select
-            [(ngModel)]="roomId"
-            [ngModelOptions]="{ standalone: true }"
-            (selectionChange)="onRoomChange()"
+    <div class="w-110 ml-auto">
+      <ebp-message
+        class="mb-2"
+        [html]="'view.arena_mode.intro' | translate"
+      ></ebp-message>
+      <div class="box">
+        <form (submit)="register()">
+          <mat-form-field>
+            <mat-label>{{ 'view.arena_mode.roomId' | translate }}</mat-label>
+            <mat-select
+              [(ngModel)]="roomId"
+              [ngModelOptions]="{ standalone: true }"
+              (selectionChange)="onRoomChange()"
+            >
+              @for (location of locations; track location.id) {
+                <mat-option [value]="+location.id"
+                  >{{ location.country }} — {{ location.name }}</mat-option
+                >
+              }
+            </mat-select>
+          </mat-form-field>
+          <mat-form-field>
+            <mat-label>{{ 'view.arena_mode.arenaId' | translate }}</mat-label>
+            <mat-select
+              [(ngModel)]="arenaId"
+              [ngModelOptions]="{ standalone: true }"
+              [disabled]="!selectedLocation || arenaLocked"
+            >
+              @for (
+                terrain of selectedLocation?.terrains ?? [];
+                track terrain.id
+              ) {
+                <mat-option [value]="+terrain.id">{{
+                  terrain.name
+                }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+          <mat-form-field>
+            <mat-label>{{ 'view.arena_mode.key' | translate }}</mat-label>
+            <input
+              matInput
+              type="password"
+              [ngModelOptions]="{ standalone: true }"
+              [(ngModel)]="key"
+            />
+          </mat-form-field>
+          <button
+            [disabled]="!roomId || !arenaId || !key || registering"
+            type="submit"
+            class="w-full mt-1 green"
           >
-            @for (location of locations; track location.id) {
-              <mat-option [value]="+location.id"
-                >{{ location.country }} — {{ location.name }}</mat-option
-              >
+            @if (registering) {
+              <i class="fa-sharp fa-solid fa-spinner fa-spin"></i>
+            } @else {
+              {{ 'view.arena_mode.register' | translate }}
             }
-          </mat-select>
-        </mat-form-field>
-        <mat-form-field>
-          <mat-label>{{ 'view.arena_mode.arenaId' | translate }}</mat-label>
-          <mat-select
-            [(ngModel)]="arenaId"
-            [ngModelOptions]="{ standalone: true }"
-            [disabled]="!selectedLocation || arenaLocked"
-          >
-            @for (
-              terrain of selectedLocation?.terrains ?? [];
-              track terrain.id
-            ) {
-              <mat-option [value]="+terrain.id">{{ terrain.name }}</mat-option>
-            }
-          </mat-select>
-        </mat-form-field>
-        <mat-form-field>
-          <mat-label>{{ 'view.arena_mode.key' | translate }}</mat-label>
-          <input
-            matInput
-            type="password"
-            [ngModelOptions]="{ standalone: true }"
-            [(ngModel)]="key"
-          />
-        </mat-form-field>
-        <button
-          [disabled]="!roomId || !arenaId || !key || registering"
-          type="submit"
-          class="w-100 mt-1 green"
-        >
-          @if (registering) {
-            <i class="fa-sharp fa-solid fa-spinner fa-spin"></i>
-          } @else {
-            {{ 'view.arena_mode.register' | translate }}
-          }
-        </button>
-      </form>
+          </button>
+        </form>
+      </div>
     </div>
   }
 }

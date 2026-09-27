@@ -149,7 +149,7 @@
       "urlLabel": "YouTube- / Twitch-URL"
     },
     "arena_mode": {
-      "intro": "Diese Seite richtet Tools auf dem Streaming-PC einer EVA-Halle ein. Sobald die Halle identifiziert ist, werden die in der Arena gespielten Partien automatisch in Originalqualität aufgezeichnet, analysiert und an EBP gesendet.<br/><br/>Beim Import ihrer Spiele erhalten die Spieler sofort ihre Videos und Analysen.",
+      "intro": "Diese Seite richtet Tools auf dem Streaming-PC einer EVA-Halle ein. Sobald die Halle identifiziert ist, werden die in der Arena gespielten Partien automatisch in Originalqualität aufgezeichnet und an EBP gesendet.<br/><br/>Beim Import ihrer Spiele erhalten die Spieler sofort ihre Spiele und ihre Videos.",
       "roomId": "Halle",
       "arenaId": "Arena",
       "key": "Schlüssel",
@@ -161,14 +161,10 @@
         "network": "Netzwerkfehler, bitte versuchen Sie es erneut."
       },
       "capture": {
-        "device": "Videoquelle",
         "waitingFrame": "Warten auf das erste Bild der Quelle. Die Aufzeichnung beginnt, sobald es eintrifft: Bleibt diese Meldung bestehen, liefert die Quelle kein Bild.",
         "waitingGame": "Warten auf das Spiel: Die Aufnahme startet, sobald After-H oder Color Chaos geöffnet ist.",
-        "screens": "Bildschirme",
-        "cameras": "Virtuelle Kameras",
-        "refresh": "Liste aktualisieren",
-        "recording": "Aufnahme läuft von „{{device}}“. Erkannte Partien werden automatisch analysiert und hochgeladen.",
-        "stopped": "Die Aufnahme ist gestoppt. Wählen Sie eine Videoquelle und starten Sie die Aufnahme.",
+        "recording": "Aufnahme läuft. Erkannte Partien werden automatisch analysiert und hochgeladen.",
+        "stopped": "Die Aufnahme ist gestoppt. Starten Sie sie, um Partien aufzuzeichnen.",
         "error": "Die Aufnahme wurde mit einem Fehler beendet:",
         "start": "Aufnahme starten",
         "stop": "Aufnahme stoppen",
