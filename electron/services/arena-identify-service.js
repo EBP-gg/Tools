@@ -26,15 +26,21 @@ const { resolveArenaGameId } = require('./tools-api-client');
 // deux formes sont disjointes (un nom à 7 jetons ne peut pas matcher un motif à
 // 6, et inversement) : chaque service ne voit que ce qui le concerne.
 //
-// Ce service ne DÉTRUIT et ne DÉPLACE jamais rien. Une game qu'EBP n'identifie
-// pas reste découpée dans `games/` et sera re-proposée au tour suivant, aussi
-// longtemps qu'elle est là — un admin peut donc toujours la récupérer à la main.
+// Une game qu'EBP n'identifie pas reste découpée dans `games/` et sera
+// re-proposée au tour suivant — un admin peut donc la récupérer à la main —
+// mais pas indéfiniment : passé PENDING_MAX_AGE_S après sa fin, elle est
+// supprimée. Sans ça, les games d'intersalle (jamais rattachées à ce terrain)
+// s'accumulent sur le disque, et chaque tour les renvoie toutes au resolve, dont
+// le quota par arène finirait par bloquer l'identification des games normales.
 //
 // Comme le poller, il tourne en permanence et vérifie lui-même à chaque tour
 // que le mode salle est actif : impossible d'avoir un mode salle activé et une
 // identification à l'arrêt.
 
 const TICK_MS = 60 * 1000;
+// Au-delà, une game toujours pas identifiée ne le sera plus : EBP ne la connaît
+// pas pour ce terrain (intersalle, game jamais remontée).
+const PENDING_MAX_AGE_S = 7 * 24 * 60 * 60;
 // Nom provisoire écrit par le pipeline : 6 champs, pas de gameId.
 const PENDING_RE =
     /^(\d+)_(\d+)_([A-Za-z0-9-]+)_(\d+)_(\d+)_([^_]+)\.mp4$/;
@@ -78,6 +84,16 @@ async function tick() {
         if (!M) continue;
         const END_EPOCH = parseInt(M[5], 10);
         const MAP = M[3];
+
+        if (Date.now() / 1000 - END_EPOCH > PENDING_MAX_AGE_S) {
+            try {
+                fs.unlinkSync(path.join(DIR, NAME));
+                console.log(`[arena-identify] expired, deleted — ${NAME}`);
+            } catch (e) {
+                console.error('[arena-identify] delete failed:', NAME, e.message);
+            }
+            continue;
+        }
 
         let res;
         try {
