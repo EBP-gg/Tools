@@ -8338,7 +8338,13 @@ def main() -> None:
         if TESSERACT_CMD:
             pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
         import scoreboard_read
-        IMAGE = cv2.imread(sys.argv[2])
+        # cv2.imread ne sait pas ouvrir un chemin non ASCII sous Windows
+        # (« Capture d'écran … .png ») : on lit les octets côté Python.
+        try:
+            IMAGE = cv2.imdecode(np.fromfile(sys.argv[2], dtype=np.uint8),
+                                 cv2.IMREAD_COLOR)
+        except OSError:
+            IMAGE = None
         if IMAGE is None:
             _emit({'type': 'error',
                    'message': f'cannot read image: {sys.argv[2]}'})
