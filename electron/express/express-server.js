@@ -23,14 +23,46 @@ const {
  */
 const SERVER_TOKEN = crypto.randomBytes(32).toString('hex');
 
+/**
+ * Jetons limités à UN fichier, pour les pages hors renderer (le site, qui lit
+ * la vidéo choisie via un deeplink). Le jeton global ne doit pas quitter le
+ * renderer : il transiterait par le relais socket de l'API et ouvrirait au
+ * site tous les fichiers du compte, settings.json compris. Clé = chemin exact.
+ */
+const FILE_GRANTS = new Map();
+
 /** Compare deux jetons en temps constant, sans fuir leur longueur. */
-function isValidToken(candidate) {
-    if (typeof candidate !== 'string') {
+function tokensMatch(candidate, expected) {
+    if (typeof candidate !== 'string' || typeof expected !== 'string') {
         return false;
     }
     const A = Buffer.from(candidate);
-    const B = Buffer.from(SERVER_TOKEN);
+    const B = Buffer.from(expected);
     return A.length === B.length && crypto.timingSafeEqual(A, B);
+}
+
+/** Jeton global, ou jeton accordé pour ce chemin précis. */
+function isValidToken(candidate, filePath) {
+    return (
+        tokensMatch(candidate, SERVER_TOKEN) ||
+        tokensMatch(candidate, FILE_GRANTS.get(filePath))
+    );
+}
+
+/**
+ * Autorise la lecture de ce seul fichier via /file, jusqu'à la fermeture de
+ * Tools (le lecteur vidéo refait des requêtes Range tant qu'il est ouvert).
+ * À réserver aux fichiers choisis par l'utilisateur dans le sélecteur natif.
+ * @param {string} filePath Chemin absolu du fichier.
+ * @returns {string} Le jeton à passer en `token` avec ce `path`.
+ */
+function grantFileAccess(filePath) {
+    let token = FILE_GRANTS.get(filePath);
+    if (!token) {
+        token = crypto.randomBytes(32).toString('hex');
+        FILE_GRANTS.set(filePath, token);
+    }
+    return token;
 }
 
 /**
@@ -58,12 +90,12 @@ async function setupExpressServer() {
             if (HOST !== 'localhost' && HOST !== '127.0.0.1') {
                 return res.status(403).send('Forbidden');
             }
-            if (!isValidToken(req.query.token)) {
-                return res.status(403).send('Forbidden');
-            }
             const FILE_PATH = req.query.path;
             if (!FILE_PATH || typeof FILE_PATH !== 'string') {
                 return res.status(400).send('Missing path');
+            }
+            if (!isValidToken(req.query.token, FILE_PATH)) {
+                return res.status(403).send('Forbidden');
             }
             res.sendFile(FILE_PATH);
         });
@@ -95,5 +127,6 @@ async function setupExpressServer() {
 
 module.exports = {
     setupExpressServer,
-    SERVER_TOKEN
+    SERVER_TOKEN,
+    grantFileAccess
 };

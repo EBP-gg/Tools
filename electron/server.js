@@ -111,7 +111,8 @@ const socketEmit = require('./services/socket-service');
 const sessionService = require('./services/session-service');
 const {
     setupExpressServer,
-    SERVER_TOKEN
+    SERVER_TOKEN,
+    grantFileAccess
 } = require('./express/express-server');
 const {
     changeVideoResolution,
@@ -952,6 +953,9 @@ if (!APP_GOT_THE_LOCK) {
                 );
                 socketEmit(data.socket, 'openFiles', {
                     paths: PICKED_FILES,
+                    // Un jeton par fichier choisi, pour que le site lise ce
+                    // fichier-là via /file et rien d'autre.
+                    tokens: PICKED_FILES.map(grantFileAccess),
                     port: getCurrentPort()
                 });
                 break;
