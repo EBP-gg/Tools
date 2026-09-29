@@ -162,7 +162,8 @@ arenaModeService.setStatusProvider(() => {
 });
 const {
     ApiError,
-    getArenaLocations: getArenaLocationsApi
+    getArenaLocations: getArenaLocationsApi,
+    redeemDeepLink
 } = require('./services/tools-api-client');
 
 //#endregion
@@ -313,23 +314,68 @@ if (!APP_GOT_THE_LOCK) {
             return;
         }
 
-        // Remove protocol prefix (ebp://)
+        // Remove protocol prefix (tools://)
         const PATH = url.replace(`${PROTOCOL_NAME}://`, '');
         console.log('[DEEP-LINK] Path:', redactTokenInUrl(PATH));
 
         // Parse the URL to extract action and parameters
-        // Example: ebp://open-game/12345
+        // Example: tools://open-game/12345
         const PARTS = PATH.split('/');
-        const ACTION = PARTS[0];
         const PARAMS = PARTS.slice(1);
 
-        const DATA = JSON.parse(decodeURIComponent(PARAMS));
+        // L'URL est écrite par l'appelant : un JSON invalide est le cas NORMAL
+        // d'un lien hostile ou tronqué, pas un incident. Sans ce filet, il
+        // remontait en rejet non géré dans le processus principal.
+        let data;
+        try {
+            data = JSON.parse(decodeURIComponent(PARAMS));
+        } catch {
+            console.warn('[DEEP-LINK] Rejected: malformed payload');
+            return;
+        }
+        if (!data || typeof data !== 'object') {
+            console.warn('[DEEP-LINK] Rejected: payload is not an object');
+            return;
+        }
 
-        handleDeepLinkData(ACTION, DATA);
+        // Le protocole `tools://` est ouvert à toute la machine : n'importe
+        // quelle page web peut faire ouvrir une de ces URLs, et rien dedans ne
+        // dit qui l'a écrite. On n'y lit donc RIEN d'autre que le code, qui est
+        // échangé contre la vraie demande auprès du back — lequel n'en délivre
+        // qu'à une session authentifiée. Un lien fabriqué par un tiers n'a pas
+        // de code valide et meurt ici.
+        if (typeof data.code !== 'string' || !data.code) {
+            console.warn('[DEEP-LINK] Rejected: no exchange code');
+            return;
+        }
+
+        let request;
+        try {
+            request = await redeemDeepLink(data.code);
+        } catch (error) {
+            console.warn('[DEEP-LINK] Rejected:', error.message);
+            return;
+        }
+        if (!request || typeof request.action !== 'string') {
+            console.warn('[DEEP-LINK] Rejected: empty exchange response');
+            return;
+        }
+
+        // Action, jeton et socket viennent tous de la réponse du back — jamais
+        // de l'URL. Le back a vérifié que le socket appartient bien au compte
+        // qui a lancé l'action, donc les résultats ne peuvent plus être
+        // détournés vers la session d'un tiers.
+        handleDeepLinkData(request.action, {
+            ...(request.params ?? {}),
+            token: request.token,
+            socket: request.socket
+        });
     }
 
     /**
-     * Handle deep link URL (ebp://...)
+     * Exécute une demande de deeplink DÉJÀ ÉCHANGÉE auprès du back. Ne jamais
+     * l'appeler avec le contenu brut d'une URL : `handleDeepLink` est le seul
+     * point d'entrée légitime, et c'est lui qui authentifie la demande.
      * @param {string} action
      * @param {*} data
      */
@@ -338,7 +384,7 @@ if (!APP_GOT_THE_LOCK) {
 
         // Tools ne se connecte plus : chaque deeplink d'analyse rafraîchit le
         // jeton, donc un changement de compte côté site est suivi ici sans
-        // action de l'utilisateur.
+        // action de l'utilisateur. Le jeton vient de l'échange, donc du back.
         sessionService.setFromDeepLink(data);
 
         switch (action) {

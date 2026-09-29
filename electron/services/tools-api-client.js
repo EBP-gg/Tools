@@ -315,6 +315,28 @@ function registerArena(payload) {
 }
 
 /**
+ * POST /api/tools/deeplink/redeem
+ * Échange le code reçu dans un deeplink `tools://` contre la demande réelle :
+ * action, jeton de session, socket destinataire et paramètres.
+ *
+ * Sans auth, et c'est le principe : Tools n'a pas encore de credential à ce
+ * stade — l'échange est ce qui le lui donne. Le code est le secret, à usage
+ * unique et valable deux minutes. Une seule tentative : un code refusé l'est
+ * définitivement (déjà échangé, expiré), le réessayer n'a aucun sens.
+ *
+ * @param {string} code Code extrait de l'URL du deeplink.
+ * @returns {Promise<{action:string, socket:string, token:string, params:object}>}
+ */
+function redeemDeepLink(code) {
+    return apiRequest(
+        'POST',
+        '/deeplink/redeem',
+        { code },
+        { requireAuth: false, retries: 1 }
+    );
+}
+
+/**
  * GET /api/tools/arena/locations
  * Salles activables (clé posée par un admin) avec leurs arènes — alimente les
  * listes déroulantes du formulaire mode salle. Pas d'auth user (comme le
@@ -845,6 +867,7 @@ async function uploadFileToPresignedUrl(
 
 module.exports = {
     identifyGames,
+    redeemDeepLink,
     registerArena,
     getArenaLocations,
     sendArenaHeartbeat,
