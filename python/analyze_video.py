@@ -1182,15 +1182,25 @@ def _validate_kill_row(frame: np.ndarray, bbox, kf_spec: dict) -> bool:
     return black_ratio >= kf_spec.get('minEdgeBlackRatio', 0.30)
 
 
+# Team kill (tueur et victime de la même équipe) : les deux pseudos ont la MÊME
+# couleur. Un bloc de couleur n'est retenu comme pseudo que s'il est « plein »
+# (largeur ET pixels) — écarte les taches de décor/anti-aliasing de l'autre
+# couleur qui traînent sur l'aplat du tueur ou dans le trou du picto.
+KF_TK_MIN_BLOCK_W = 20       # largeur min (px) d'un bloc pseudo
+KF_TK_MIN_BLOCK_PX = 150     # pixels couleur min d'un bloc pseudo
+KF_TK_MIN_WEAPON_GAP = 30    # écart min (px) tueur → victime (= picto arme)
+KF_TK_MAX_WEAPON_GAP = 110   # écart max : au-delà, le bloc est du décor, pas le pseudo tueur
+
+
 def _split_kill_row(frame: np.ndarray, bbox, orange_color, blue_color,
                     cos_thresh: float = 0.75, min_chroma: float = 25.0,
                     min_brightness: int = 100):
     """
     Découpe une bbox de kill row en killer / weapon / victim en localisant les
     colonnes ayant des pixels matchant la couleur orange-team ou blue-team
-    résolue. Le killer et la victime ont chacun leur cluster (couleurs
-    distinctes — kill cross-team obligatoire), le picto arme tient entre les
-    deux.
+    résolue. Le killer et la victime ont chacun leur cluster, le picto arme
+    tient entre les deux. Couleurs distinctes pour un kill cross-team ; même
+    couleur pour un team kill (deux blocs pleins de part et d'autre du picto).
 
     On NE peut PAS se fier aux pixels near-white pour localiser le picto : si
     le killer a un mur blanc derrière sa box transparente, tout le côté killer
@@ -1206,8 +1216,8 @@ def _split_kill_row(frame: np.ndarray, bbox, orange_color, blue_color,
     ne respectent PAS la dominance R-vs-B implicite de la palette standard.
 
     Retourne dict {'killer': {'box', 'team'}, 'weapon': {'box'}, 'victim':
-    {'box', 'team'}} ou None si :
-      - une seule couleur d'équipe présente (pas un kill cross-team)
+    {'box', 'team'}} (killer.team == victim.team pour un team kill) ou None si :
+      - une seule couleur d'équipe présente sans deux blocs pleins (ni cross-team ni TK)
       - les clusters orange/bleu s'overlap (pas de zone picto fiable)
     """
     (x1, y1), (x2, y2) = bbox
@@ -1235,13 +1245,11 @@ def _split_kill_row(frame: np.ndarray, bbox, orange_color, blue_color,
     n_b_per_col = m_b.sum(axis=0)
     cols_o = np.where(n_o_per_col >= 2)[0]
     cols_b = np.where(n_b_per_col >= 2)[0]
-    if len(cols_o) < 4 or len(cols_b) < 4:
-        return None
 
-    def _largest_block(cols, max_gap: int = 5):
-        """Plus gros bloc contigu de cols (gaps ≤ max_gap tolérés)."""
+    def _blocks(cols, max_gap: int = 5):
+        """Blocs contigus de cols (gaps ≤ max_gap tolérés), de gauche à droite."""
         if len(cols) == 0:
-            return None
+            return []
         s = np.sort(cols)
         blocks = []
         cur_start = cur_end = int(s[0])
@@ -1253,7 +1261,51 @@ def _split_kill_row(frame: np.ndarray, bbox, orange_color, blue_color,
                 blocks.append((cur_start, cur_end))
                 cur_start = cur_end = c
         blocks.append((cur_start, cur_end))
-        return max(blocks, key=lambda b: b[1] - b[0])
+        return blocks
+
+    # Team kill : la victime (fond noir opaque, couleur fiable) est le bloc plein
+    # le plus à droite. Le tueur est le bloc plein qui bute sur le picto arme
+    # (écart victime dans [MIN, MAX]_WEAPON_GAP) ; si c'est un bloc de la couleur
+    # de la victime, c'est un TK. Testé AVANT le cas cross-team : sur une row TK,
+    # le décor derrière l'aplat du tueur laisse souvent passer un bloc de l'autre
+    # couleur, que le split cross-team prenait pour un tueur adverse. À l'inverse
+    # (map bleutée sous un tueur orange), du décor de la couleur de la victime
+    # colle au pseudo tueur : chaque couleur présente son bloc candidat et le plus
+    # fourni en pixels l'emporte — le texte est dense, le décor fragmenté.
+    def _solid(cols, n_per_col):
+        return [(b, int(n_per_col[b[0]:b[1] + 1].sum())) for b in _blocks(cols)
+                if b[1] - b[0] + 1 >= KF_TK_MIN_BLOCK_W
+                and int(n_per_col[b[0]:b[1] + 1].sum()) >= KF_TK_MIN_BLOCK_PX]
+
+    solid = {'orange': _solid(cols_o, n_o_per_col), 'blue': _solid(cols_b, n_b_per_col)}
+    if solid['orange'] or solid['blue']:
+        team = max((t for t in solid if solid[t]), key=lambda t: solid[t][-1][0][1])
+        other = 'blue' if team == 'orange' else 'orange'
+        victim_block = solid[team][-1][0]
+
+        def _killer_candidate(blocks):
+            near = [(b, px) for b, px in blocks
+                    if KF_TK_MIN_WEAPON_GAP <= victim_block[0] - b[1] <= KF_TK_MAX_WEAPON_GAP]
+            return near[-1] if near else None
+
+        same = _killer_candidate(solid[team][:-1])
+        rival = _killer_candidate(solid[other])
+        if same is not None and (rival is None or same[1] > rival[1]):
+            killer_right = same[0][1] + 1
+            victim_left = victim_block[0]
+            return {
+                'killer': {'box': ((x1,                y1), (x1 + killer_right, y2)), 'team': team},
+                'weapon': {'box': ((x1 + killer_right, y1), (x1 + victim_left,  y2))},
+                'victim': {'box': ((x1 + victim_left,  y1), (x2,                y2)), 'team': team},
+            }
+
+    if len(cols_o) < 4 or len(cols_b) < 4:
+        return None
+
+    def _largest_block(cols):
+        """Plus gros bloc contigu de cols."""
+        blocks = _blocks(cols)
+        return max(blocks, key=lambda b: b[1] - b[0]) if blocks else None
 
     # Plus gros bloc contigu pour chaque couleur. Les pixels parasites isolés
     # (scenery dont la couleur ressemble à une équipe, p.ex. champ d'énergie
