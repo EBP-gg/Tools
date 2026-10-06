@@ -501,6 +501,26 @@ ZB_END_NO_OUTRO_MARGIN_S = 15.0
 # partie SUIVANTE ne commence (relevé jusqu'à 50 s après la fin sur le corpus).
 ZB_PLAY_END_CONFIRM_SPAN_S = (18.0, 33.0)
 ZB_PLAY_END_CONFIRM_PROBES = 6
+# Portée du balayage qui cherche la fin du gameplay. La fenêtre de contrôle
+# ci-dessus n'a de sens que si la borne est la VRAIE fin du gameplay : bornée trop
+# tôt, en plein jeu, elle peut tomber sur une mort du joueur et conclure à une fin
+# (game de salle perdue le 02/10/2026, `ZOMBIE BUG.mp4` : borne plafonnée à 710 s
+# par le `max_span` de 15 s, jeu jusqu'à 722 s, mort de 723 à 735 s). La vraie fin
+# est à moins de 15 s quand la remontée l'aborde, mais jusqu'à 30 s quand la
+# confirmation en arrière a échoué une fois (mort dans les dernières secondes).
+# Un balayage qui atteint son plafond ne date donc rien.
+ZB_PLAY_END_SCAN_MAX_S = 60.0
+ZB_PLAY_END_SCAN_STEP_S = 0.5
+# Chrono de la partie, dans le cadre gris au-dessus de la pastille. Quand le
+# joueur qui filme est mort — ou toute l'équipe —, le cartouche disparaît pendant
+# des minutes mais la partie continue pour EVA jusqu'à son outro : sans ce
+# signal, la fin datée tombait 4 à 10 min trop tôt et le resolve (fin ± 3 min)
+# ne retrouvait plus la game. Écart moyen entre deux frames à 2 s d'intervalle,
+# mesuré : ≤ 1,3 en pré-game (figé à 35:00), 20 à 41 en jeu, 4 à 33 en
+# spectateur.
+ZB_CLOCK_BOX = ((905, 38), (1020, 74))
+ZB_CLOCK_DT_S = 2.0
+ZB_CLOCK_RUNNING_MIN_DIFF = 3.0
 # Écart-type sous lequel la région du HUD est d'une seule teinte : la vidéo n'a
 # alors RIEN à dire, ni « en jeu » ni « fini », et la sonde ne doit pas voter.
 # Deux situations la produisent, et les confondre avec une fin de partie coûtait
@@ -4628,6 +4648,25 @@ def _zombies_game_in_progress(cap: cv2.VideoCapture, duration: float) -> bool:
     return False
 
 
+def _zombies_clock_running(cap: cv2.VideoCapture, frame: np.ndarray,
+                           timestamp: float) -> bool:
+    """
+    Le chrono de la partie zombie tourne-t-il à *timestamp* (dont *frame* est la
+    frame) ? Il faut la pastille — sinon ce n'est pas le HUD zombie — et un chrono
+    qui a changé `ZB_CLOCK_DT_S` plus tard : figé à 35:00 en pré-game, il défile
+    pendant la partie, joueur mort ou pas.
+    """
+    if not _detect_zombies_hud(frame):
+        return False
+    LATER = _get_frame(cap, timestamp + ZB_CLOCK_DT_S)
+    if LATER is None:
+        return False
+    (X1, Y1), (X2, Y2) = ZB_CLOCK_BOX
+    A = cv2.cvtColor(frame[Y1:Y2, X1:X2], cv2.COLOR_RGB2GRAY).astype(np.int16)
+    B = cv2.cvtColor(LATER[Y1:Y2, X1:X2], cv2.COLOR_RGB2GRAY).astype(np.int16)
+    return float(np.abs(A - B).mean()) >= ZB_CLOCK_RUNNING_MIN_DIFF
+
+
 def _zombies_still_playing_after(cap: cv2.VideoCapture, timestamp: float):
     """
     La partie zombie continue-t-elle APRÈS *timestamp* ? Sert à valider une fin de
@@ -4650,6 +4689,11 @@ def _zombies_still_playing_after(cap: cv2.VideoCapture, timestamp: float):
     - une frame sans information ne VOTE PAS (cf. `ZB_HUD_FLAT_STD`). Sans ça, un
       trou de captation, ou l'aplat qui suit l'outro, se lisait « plus personne ne
       joue » — donc « la partie est finie », au beau milieu d'une partie.
+
+    Le joueur qui filme peut aussi être mort, voire toute l'équipe : plus de
+    cartouche, mais la partie court toujours pour EVA jusqu'à son outro. Une
+    sonde où le chrono tourne vote donc « elle continue » (cf.
+    `_zombies_clock_running`).
     """
     START, END = ZB_PLAY_END_CONFIRM_SPAN_S
     STEP = (END - START) / (ZB_PLAY_END_CONFIRM_PROBES - 1)
@@ -4663,11 +4707,14 @@ def _zombies_still_playing_after(cap: cv2.VideoCapture, timestamp: float):
         if REGION.std() < ZB_HUD_FLAT_STD:
             continue
         VOTES += 1
-        if _detect_zombies_playing(FRAME):
+        if _detect_zombies_playing(FRAME) or _zombies_clock_running(
+                cap, FRAME, timestamp + START + I * STEP):
             PLAYING += 1
     if VOTES * 2 < ZB_PLAY_END_CONFIRM_PROBES:
         return None
-    return PLAYING * 2 > VOTES
+    # Une égalité vaut « elle continue » : une vraie fin ne laisse au plus qu'une
+    # ou deux frames de gameplay isolées dans la fenêtre, pas la moitié.
+    return PLAYING * 2 >= VOTES
 
 
 def _scan_while(cap: cv2.VideoCapture, timestamp: float, predicate,
@@ -6423,6 +6470,10 @@ def _analyze(
     # le HUD ne bouge pas dans une vidéo donnée même si plusieurs games s'y
     # succèdent. Évite ~32 ms × N frames de matchTemplate redondant.
     HUD_ANCHOR: tuple = None
+    # Instant du dernier candidat « fin du gameplay » écarté. Un balayage qui le
+    # rejoint sans interruption est dans le même tronçon de jeu, déjà jugé : on
+    # s'y arrête au lieu de reparcourir jusqu'à 60 s de vidéo à chaque bond.
+    ZB_REJECTED_PLAY_TS: float = None
 
     LAST_SEND_PERCENT: int = -1
     LAST_SEND_COMPLETED_COUNT: int = -1
@@ -6645,9 +6696,15 @@ def _analyze(
             if (_detect_zombies_playing(FRAME)
                     and all(_zombies_playing_at(CAP, TIMESTAMP - BACK)
                             for BACK in ZB_PLAY_CONFIRM_S)):
+                SPAN = ZB_PLAY_END_SCAN_MAX_S
+                if ZB_REJECTED_PLAY_TS is not None and ZB_REJECTED_PLAY_TS > TIMESTAMP:
+                    SPAN = min(SPAN, ZB_REJECTED_PLAY_TS - TIMESTAMP)
                 PLAY_END = _scan_while(
                     CAP, TIMESTAMP, _detect_zombies_playing,
+                    step=ZB_PLAY_END_SCAN_STEP_S, max_span=SPAN,
                 )
+                # Dernière sonde du balayage encore en jeu : la fin est au-delà.
+                CAPPED = PLAY_END > TIMESTAMP + SPAN - ZB_PLAY_END_SCAN_STEP_S + 1e-3
                 # Trois façons de n'avoir PAS trouvé une fin de game.
                 #
                 # 1. Le gameplay court jusqu'au bout du fichier : ce n'est pas la
@@ -6677,10 +6734,15 @@ def _analyze(
                 # None = la vidéo s'arrête trop tôt, ou n'a rien à dire.
                 RESUMES = (
                     _zombies_still_playing_after(CAP, PLAY_END)
-                    if PLAY_END + ZB_PLAY_END_CONFIRM_SPAN_S[-1] <= DURATION
+                    if not CAPPED
+                    and PLAY_END + ZB_PLAY_END_CONFIRM_SPAN_S[-1] <= DURATION
                     else None
                 )
-                if PLAY_END + ZB_END_NO_OUTRO_MARGIN_S > DURATION:
+                if CAPPED:
+                    if DEBUG:
+                        _emit({'log': f'Zombies gameplay still running at '
+                                      f'{PLAY_END:.0f}s — no end within reach'})
+                elif PLAY_END + ZB_END_NO_OUTRO_MARGIN_S > DURATION:
                     if DEBUG:
                         _emit({'log': f'Zombies gameplay runs to {PLAY_END:.0f}s, '
                                       f'past the end of a {DURATION:.0f}s capture — '
@@ -6705,6 +6767,8 @@ def _analyze(
                     GAME['end'] = PLAY_END + ZB_END_NO_OUTRO_MARGIN_S
                     GAMES.insert(0, GAME)
                     CURRENT = GAME
+                if not FOUND:
+                    ZB_REJECTED_PLAY_TS = TIMESTAMP
 
         # ── Écran VICTOIRE = fin de game, en secours de la score frame ──────
         # L'écran VICTOIRE précède la score frame de 10 à 15 s : en temps normal
