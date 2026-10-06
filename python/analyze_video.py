@@ -6809,8 +6809,14 @@ def _analyze(
                 and not CURRENT['__nojump__']):
             if _detect_zombies_card(FRAME):
                 CURRENT['__cardRef__'] = TIMESTAMP
-                TIMESTAMP -= ZB_CARD_JUMP_S
-                continue
+                # Un bond qui sortirait de la vidéo arrêterait la remontée sans
+                # avoir marché jusqu'au loading : game sortie en `startFallback`
+                # quand elle commence dans la première minute de la fenêtre
+                # (corpus `18-48-42`, loading à 12 s, dernier cartouche à 18 s).
+                if TIMESTAMP - ZB_CARD_JUMP_S > 0:
+                    TIMESTAMP -= ZB_CARD_JUMP_S
+                    continue
+                CURRENT['__nojump__'] = True
             # Pas de cartouche. Tant qu'on n'en a jamais vu, on est encore dans
             # l'outro d'où l'on vient : on marche jusqu'au gameplay.
             if CURRENT['__cardRef__'] is not None:
