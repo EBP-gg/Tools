@@ -59,6 +59,13 @@ TEAM_BLUE = [
     (180, 0, 245),   # Local League
     (179, 0, 243),   # Summit
 ]
+# Nom de chaque thème, aligné sur TEAM_ORANGE/TEAM_BLUE. Remonté dans la game
+# (`teamTheme`) : le mode salle n'enregistre que les games Classic, EVA
+# interdisant la captation des games de ligue (Pro League, Challenger…).
+TEAM_THEMES = ['classic', 'pro-league', 'challenger', 'local-league', 'summit']
+# Nombre de frames de gameplay lues pour élire le thème d'une game : une carte
+# de vie entamée peut fausser une lecture isolée, le vote majoritaire l'absorbe.
+THEME_VOTES = 5
 
 # Couleurs du TEXTE killfeed par thème (clé = index dans TEAM_ORANGE/TEAM_BLUE).
 # Le killfeed rend les pseudos plus sombres que les cartes de vie (cartouches
@@ -6309,6 +6316,8 @@ def _new_game(mode: int, game_type: str = GAME_TYPE_AFTER_H) -> dict:
     __timerRef__ : dernier couple (timestamp, secondes restantes) LU ET VÉRIFIÉ
                    dans cette game, point de repli des bonds arrière.
     __nojump__   : plus aucun bond autorisé pour cette game (on marche).
+    teamTheme    : thème HUD élu (TEAM_THEMES) sur les frames de gameplay, None
+                   si illisible ou sans objet (Zombies, Color Chaos).
     game_type    : jeu détecté. `mode` reste l'index MODES d'After-H (géométrie
                    du score frame) et n'a de sens que pour GAME_TYPE_AFTER_H —
                    les consommateurs doivent lire `gameType` en premier.
@@ -6327,6 +6336,8 @@ def _new_game(mode: int, game_type: str = GAME_TYPE_AFTER_H) -> dict:
         # du début d'une game zombie, cf. la remontée par bonds de `_analyze`.
         '__cardRef__': None,
         '__nojump__': False,
+        'teamTheme': None,
+        '__themeVotes__': {},
         'orangeTeam': {
             'score': 0,
             'scoreImage': None,
@@ -6979,6 +6990,20 @@ def _analyze(
                 # fin de game = sûrement en gameplay) et on recule.
                 if HUD_ANCHOR is None:
                     HUD_ANCHOR = _find_hud_anchor_safely(CAP, CURRENT['end'] - 30)
+
+                # Thème HUD : vote sur les premières frames de gameplay lisibles,
+                # à plus de 30 s de la fin. L'écran de scores de fin est aux
+                # couleurs Classic quel que soit le thème, et passe le test
+                # « playing » : sans cette marge il remporte tous les votes
+                # (mesuré sur une game Local League : 5 votes Classic sur 5).
+                VOTES = CURRENT['__themeVotes__']
+                if (HUD_ANCHOR is not None and TIMESTAMP < CURRENT['end'] - 30
+                        and sum(VOTES.values()) < THEME_VOTES):
+                    ORG, _ = _resolve_team_colors(FRAME, anchor=HUD_ANCHOR)
+                    if ORG is not None:
+                        THEME = TEAM_THEMES[TEAM_ORANGE.index(tuple(ORG))]
+                        VOTES[THEME] = VOTES.get(THEME, 0) + 1
+                        CURRENT['teamTheme'] = max(VOTES, key=VOTES.get)
 
                 if not CURRENT['map'] and HUD_ANCHOR is not None:
                     # Box du nom de map dérivée de la barre HUD (anchor sûr).

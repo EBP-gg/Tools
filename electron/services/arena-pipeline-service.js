@@ -378,6 +378,18 @@ async function processRun(run) {
         // ni scores à y mettre — `unknown` et `0-0` — ce que le resolve sait
         // traiter (il désactive alors le garde-fou map).
         const GAME_TYPE = G.gameType ?? 'after-h';
+        // EVA interdit la captation des games de ligue (Pro League, Challenger…) :
+        // seul le thème HUD Classic est enregistré. Thème illisible (null) = on
+        // garde. Zombies et Color Chaos n'ont pas de thème, ils ne sont pas
+        // concernés. Le watermark avance quand même, pour ne pas re-détecter la
+        // game à chaque round.
+        if (G.teamTheme && G.teamTheme !== 'classic') {
+            console.log(
+                `[arena-pipeline] game ${G.teamTheme} ignorée (captation interdite par EVA) map=${G.map || '?'}`
+            );
+            maxExtractedEndEpoch = Math.max(maxExtractedEndEpoch, END_EPOCH);
+            continue;
+        }
         const O_SCORE = G.orangeTeam ? G.orangeTeam.score : '?';
         const B_SCORE = G.blueTeam ? G.blueTeam.score : '?';
         let NAME;
