@@ -831,7 +831,16 @@ async function uploadFileToPresignedUrl(
                     }
                 );
                 REQ.on('error', reject);
-                const STREAM = fs.createReadStream(filePath);
+                // Lecture bornée à la taille annoncée : un fichier qui grossit
+                // pendant l'envoi (le log du jour, que l'envoi lui-même alimente)
+                // dépasserait sinon le Content-Length, et la requête casserait.
+                // Vide au départ, il part vide : `end` ne peut pas borner à zéro
+                // octet, une lecture sans borne enverrait ce qu'il a pris depuis.
+                if (SIZE === 0) {
+                    REQ.end();
+                    return;
+                }
+                const STREAM = fs.createReadStream(filePath, { end: SIZE - 1 });
                 STREAM.on('error', reject);
                 // Compte les octets envoyés (le stream est paced par la
                 // backpressure de la requête PUT, donc ~= débit réseau réel).

@@ -16,6 +16,7 @@ const {
     uploadFileToPresignedUrl
 } = require('./tools-api-client');
 const { connectArena, disconnectArena } = require('./socket-service');
+const { getLogDir } = require('../core/file-logger');
 const { version: TOOLS_VERSION } = require('../../package.json');
 
 //#endregion
@@ -140,10 +141,12 @@ function sendHeartbeat() {
 
 /**
  * Chemin du dossier désigné par un ordre ou une demande de listing. Seuls ces
- * deux noms existent : le serveur ne peut pas désigner un dossier arbitraire.
+ * trois noms existent : le serveur ne peut pas désigner un dossier arbitraire.
+ * `logs` est celui du file-logger : la seule trace d'une game perdue en salle.
  * @returns {string|null}
  */
 function folderPath(folder) {
+    if (folder === 'logs') return getLogDir();
     if (!statusProvider) return null;
     const STATUS = statusProvider();
     if (folder === 'spool') return STATUS.spoolFolder;
@@ -152,10 +155,10 @@ function folderPath(folder) {
 }
 
 /**
- * Honore un ordre de remontée : un admin réclame un fichier de spool/ ou games/,
- * que le serveur ne peut pas venir chercher (le PC de salle n'est joignable par
- * personne). Le fichier part vers une zone S3 temporaire d'où l'admin le
- * télécharge.
+ * Honore un ordre de remontée : un admin réclame un fichier de spool/, games/
+ * ou logs/, que le serveur ne peut pas venir chercher (le PC de salle n'est
+ * joignable par personne). Le fichier part vers une zone S3 temporaire d'où
+ * l'admin le télécharge.
  *
  * Le nom reçu est cherché dans le `readdir` du dossier plutôt que joint au
  * chemin : le serveur ne désigne jamais un fichier du disque, il ne peut que
@@ -260,6 +263,9 @@ function readPreviewFrame() {
  * @returns {{deleted: boolean, reason?: string}}
  */
 function deleteFile(folder, name) {
+    // Les logs ne se suppriment jamais à distance : ils sont la seule trace d'une
+    // game perdue, et le fichier du jour est ouvert en écriture.
+    if (folder === 'logs') return { deleted: false, reason: 'forbidden' };
     const DIR = folderPath(folder);
     if (!DIR) return { deleted: false, reason: 'unknown_folder' };
     if (name === fetchingFile) return { deleted: false, reason: 'uploading' };
