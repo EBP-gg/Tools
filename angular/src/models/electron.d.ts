@@ -118,6 +118,8 @@ export interface ArenaCaptureStatus {
   videoStarted: boolean;
   /** Webcam de la scène écartée après une panne : enregistrement sans elle. */
   webcamSuspended: boolean;
+  /** Abonnement Arena de la salle inactif : rien n'est filmé jusqu'à son retour. */
+  suspended: boolean;
   /** Captation armée, en attente de la fenêtre du jeu : rien n'est enregistré. */
   waitingGame: boolean;
   audio: {

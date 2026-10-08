@@ -41,6 +41,11 @@ SOCKET.on('connect_error', (err) => {
 const ARENA_URL = (USE_PROD ? 'https://evabattleplan.com' : 'http://localhost:3005') + '/arena';
 
 let arenaSocket = null;
+// Relance du canal après un refus du serveur (cf. `connect_error`).
+let arenaRetryTimer = null;
+// Une minute : la vérification côté serveur ne coûte qu'une requête en base, et
+// c'est le délai que l'admin attend avant de revoir la salle en ligne.
+const ARENA_RETRY_MS = 60 * 1000;
 
 /**
  * Ouvre (ou rouvre) le canal de salle. Idempotent : rappelé au register comme
@@ -50,7 +55,8 @@ let arenaSocket = null;
  *          onList: (folder: string) => string[],
  *          onDelete: (folder: string, name: string) => {deleted:boolean, reason?:string},
  *          onFrame: () => {image: string|null, reason?: string},
- *          onUpdate: () => void}} handlers
+ *          onUpdate: () => void,
+ *          onConnect?: () => void}} handlers
  */
 function connectArena(state, handlers) {
     disconnectArena();
@@ -63,15 +69,27 @@ function connectArena(state, handlers) {
             key: state.token
         }
     });
-    arenaSocket.on('connect', () =>
-        console.log('[SOCKET] arena namespace connected')
-    );
-    // Clé révoquée, IP changée, arène inconnue : la reconnexion automatique
-    // continue de réessayer, ce qui est le bon comportement — une clé
-    // régénérée côté admin doit reprendre sans redémarrer Tools.
-    arenaSocket.on('connect_error', (err) =>
-        console.warn('[SOCKET] arena namespace refused:', err.message)
-    );
+    arenaSocket.on('connect', () => {
+        console.log('[SOCKET] arena namespace connected');
+        if (handlers.onConnect) handlers.onConnect();
+    });
+    // Clé révoquée, IP changée, abonnement inactif : le serveur refuse le
+    // handshake, et socket.io-client tient ce refus pour définitif — la socket
+    // n'est plus `active`, la reconnexion automatique ne la relance PAS (elle ne
+    // couvre que les coupures réseau). On la relance donc nous-mêmes : une clé
+    // régénérée ou un abonnement repayé doit reprendre sans redémarrer Tools.
+    const SOCKET_REF = arenaSocket;
+    arenaSocket.on('connect_error', (err) => {
+        console.warn('[SOCKET] arena namespace refused:', err.message);
+        if (SOCKET_REF.active || arenaRetryTimer) return;
+        arenaRetryTimer = setTimeout(() => {
+            arenaRetryTimer = null;
+            // Canal fermé ou remplacé entre-temps : ne pas ressusciter l'ancien.
+            if (arenaSocket === SOCKET_REF && !SOCKET_REF.active) {
+                SOCKET_REF.connect();
+            }
+        }, ARENA_RETRY_MS);
+    });
     arenaSocket.on('arena_fetch', (order) => {
         if (order && order.id && order.folder && order.name) {
             handlers.onFetch(order);
@@ -109,7 +127,21 @@ function connectArena(state, handlers) {
     });
 }
 
+/**
+ * Rouvre le canal existant : le serveur repasse ses contrôles au handshake
+ * (abonnement compris). Un refus arme la relance de `connect_error`.
+ */
+function reconnectArena() {
+    if (!arenaSocket) return;
+    arenaSocket.disconnect();
+    arenaSocket.connect();
+}
+
 function disconnectArena() {
+    if (arenaRetryTimer) {
+        clearTimeout(arenaRetryTimer);
+        arenaRetryTimer = null;
+    }
     if (arenaSocket) {
         arenaSocket.disconnect();
         arenaSocket = null;
@@ -132,3 +164,4 @@ function emit(sessionID, path, value) {
 module.exports = emit;
 module.exports.connectArena = connectArena;
 module.exports.disconnectArena = disconnectArena;
+module.exports.reconnectArena = reconnectArena;

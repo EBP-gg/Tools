@@ -13,9 +13,14 @@ const {
     sendArenaHeartbeat,
     requestArenaFileUploadUrl,
     reportArenaFileResult,
-    uploadFileToPresignedUrl
+    uploadFileToPresignedUrl,
+    ApiError
 } = require('./tools-api-client');
-const { connectArena, disconnectArena } = require('./socket-service');
+const {
+    connectArena,
+    disconnectArena,
+    reconnectArena
+} = require('./socket-service');
 const { getLogDir } = require('../core/file-logger');
 const { version: TOOLS_VERSION } = require('../../package.json');
 
@@ -62,9 +67,33 @@ let fetchingFile = null;
 // Callback d'exécution d'une mise à jour ordonnée par l'admin (posé par
 // server.js : stop captation propre puis UpdateService.forceUpdate()).
 let updateHandler = null;
+// Abonnement Arena de la salle inactif : le dernier battement a reçu un 402.
+let subscriptionInactive = false;
+// Callback de suspension de la captation (posé par server.js : le service de
+// captation requiert déjà ce module, un require croisé serait circulaire).
+let subscriptionHandler = null;
 
 function setUpdateHandler(handler) {
     updateHandler = handler;
+}
+
+/**
+ * Pose le callback appelé à chaque battement avec l'état de l'abonnement Arena.
+ * @param {(inactive: boolean) => void} handler
+ */
+function setSubscriptionHandler(handler) {
+    subscriptionHandler = handler;
+}
+
+/** Retient l'état de l'abonnement et le transmet à la captation. */
+function setSubscriptionInactive(value) {
+    // Le serveur ne contrôle l'abonnement qu'au handshake du canal : un canal
+    // déjà ouvert le resterait, et sa reconnexion — qui déclenche la reprise
+    // rapide (cf. onConnect) — n'arriverait jamais. On le rouvre donc : refusé,
+    // il retente chaque minute jusqu'au paiement.
+    if (value && !subscriptionInactive) reconnectArena();
+    subscriptionInactive = value;
+    if (subscriptionHandler) subscriptionHandler(value);
 }
 
 /**
@@ -130,13 +159,24 @@ function sendHeartbeat() {
         STATE.token
     )
         .then((res) => {
+            if (getArenaToken() !== STATE.token) return;
+            // Battement accepté : l'abonnement est actif (ou la salle n'en
+            // dépend pas encore), la captation peut reprendre.
+            setSubscriptionInactive(false);
             if (!res) return;
             if (res.fetch) handleFetchOrder(res.fetch, STATE);
             if (res.update) runUpdate();
         })
-        .catch((e) =>
-            console.warn('[arena-mode] heartbeat failed:', e.message)
-        );
+        .catch((e) => {
+            console.warn('[arena-mode] heartbeat failed:', e.message);
+            if (getArenaToken() !== STATE.token) return;
+            // 402 = salle liée à une équipe sans abonnement Arena actif. Toute
+            // autre erreur (réseau, serveur) ne dit rien de l'abonnement : l'état
+            // reste ce qu'il était.
+            if (e instanceof ApiError && e.status === 402) {
+                setSubscriptionInactive(true);
+            }
+        });
 }
 
 /**
@@ -360,7 +400,13 @@ function startHeartbeat() {
         onList: (folder) => listFiles(folderPath(folder)),
         onDelete: deleteFile,
         onFrame: readPreviewFrame,
-        onUpdate: runUpdate
+        onUpdate: runUpdate,
+        // Le serveur refuse le canal tant que l'abonnement est inactif : s'il
+        // l'accepte de nouveau, la salle a payé. Battement immédiat pour
+        // reprendre la captation sans attendre le périodique (20 min).
+        onConnect: () => {
+            if (subscriptionInactive) beat();
+        }
     });
     beat();
 }
@@ -434,6 +480,7 @@ async function register({ roomId, arenaId, key }) {
  */
 function unregister() {
     stopHeartbeat();
+    setSubscriptionInactive(false);
     const SETTINGS = StorageManager.permanentSettings;
     delete SETTINGS[SETTINGS_KEY];
     StorageManager.permanentSettings = SETTINGS;
@@ -447,6 +494,7 @@ module.exports = {
     unregister,
     startHeartbeat,
     setUpdateHandler,
+    setSubscriptionHandler,
     setStatusProvider,
     notifyChange
 };

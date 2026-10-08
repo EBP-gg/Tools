@@ -149,6 +149,11 @@ arenaModeService.setUpdateHandler(() => {
     arenaCaptureService.stopCapture();
     UPDATE_SERVICE.forceUpdate();
 });
+// Abonnement Arena inactif (402 au battement) : captation suspendue, reprise
+// d'elle-même au premier battement accepté.
+arenaModeService.setSubscriptionHandler((inactive) =>
+    arenaCaptureService.setSuspended(inactive)
+);
 // État local remonté par le battement (captation + contenu de spool/ et
 // games/). Posé ici plutôt que requis par arena-mode-service : le pipeline
 // requiert déjà ce dernier, un require croisé serait circulaire.
@@ -2806,6 +2811,8 @@ if (!APP_GOT_THE_LOCK) {
                     if (e instanceof ApiError) {
                         if (e.status === 404) error = 'unknownArena';
                         else if (e.status === 422) error = 'invalidKey';
+                        // Salle liée à une équipe sans abonnement Arena actif.
+                        else if (e.status === 402) error = 'subscriptionInactive';
                     }
                     return { success: false, error };
                 }

@@ -155,6 +155,17 @@ let gameWaitToken = 0;
 let sceneTargetExe = null;
 // Nettoyage des captations orphelines : une fois par session suffit.
 let orphansChecked = false;
+// Abonnement Arena de la salle inactif (le serveur répond 402) : plus rien n'est
+// filmé — une salle qui ne paie plus n'a plus de mode salle, et les vidéos
+// laissées sur le disque serviraient sans payer. Verrou posé dans startCapture,
+// seul point d'entrée de toutes les relances (bouton, scène, jeu, panne).
+let suspended = false;
+// La captation est voulue : posé par tout démarrage (même bloqué par la
+// suspension), levé par tout arrêt. Plus fiable que de déduire l'intention de
+// l'état de ffmpeg, qui passe par des instants creux (jeu fermé, fenêtre
+// cherchée) : c'est ce drapeau qui décide de la reprise au retour de
+// l'abonnement. Un arrêt manuel pendant la suspension l'annule donc.
+let captureWanted = false;
 
 function getSpoolFolder() {
     return StorageManager.getPermanentSettingsValue(
@@ -490,6 +501,8 @@ function killOrphanCaptures(spool) {
  * @param {boolean} gameFound Vrai quand waitForGame vient de trouver le jeu.
  */
 function startCapture(gameFound = false) {
+    captureWanted = true;
+    if (suspended) return getStatus();
     if (ffmpegProcess) return getStatus();
 
     const SPOOL = getSpoolFolder();
@@ -706,6 +719,7 @@ function startCapture(gameFound = false) {
  */
 function stopCapture() {
     stopRequested = true;
+    captureWanted = false;
     arenaAudioService.stop();
     if (restartTimer) {
         clearTimeout(restartTimer);
@@ -923,6 +937,34 @@ function getSceneView() {
 }
 
 /**
+ * Suspend la captation tant que l'abonnement Arena de la salle est inactif, et
+ * la reprend à son retour si elle était voulue. Idempotent : appelé à chaque
+ * battement.
+ * @param {boolean} value
+ */
+function setSuspended(value) {
+    if (value === suspended) return;
+    if (value) {
+        const WANTED = captureWanted;
+        console.warn('[arena-capture] abonnement Arena inactif — captation suspendue');
+        stopCapture();
+        suspended = true;
+        captureWanted = WANTED;
+        return;
+    }
+    suspended = false;
+    console.log('[arena-capture] abonnement Arena actif — fin de la suspension');
+    if (!captureWanted) return;
+    // L'ffmpeg arrêté par la suspension peut encore finaliser son segment :
+    // startCapture n'en lancerait pas un second, on reprend à sa fermeture.
+    if (ffmpegProcess) {
+        ffmpegProcess.once('close', () => startCapture());
+    } else {
+        startCapture();
+    }
+}
+
+/**
  * À appeler au boot : reprend la captation quand le mode salle est actif
  * (l'appelant vérifie ce point).
  */
@@ -943,6 +985,8 @@ function getStatus() {
         videoStarted,
         // Webcam de la scène écartée après une panne : enregistrement sans elle.
         webcamSuspended,
+        // Abonnement Arena inactif : rien n'est filmé, cf. setSuspended.
+        suspended,
         encoder: resolvedEncoder ? resolvedEncoder.name : null,
         startedAt,
         lastError,
@@ -957,6 +1001,7 @@ module.exports = {
     startCapture,
     stopCapture,
     autoStart,
+    setSuspended,
     getStatus,
     setSpoolFolder,
     getSceneView,

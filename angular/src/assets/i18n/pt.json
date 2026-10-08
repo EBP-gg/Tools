@@ -158,6 +158,7 @@
         "unknownArena": "Sala ou arena desconhecida.",
         "invalidKey": "Chave inválida.",
         "alreadyRegistered": "Outra máquina já está registada para esta arena.",
+        "subscriptionInactive": "A subscrição Arena desta sala não está ativa. O gerente pode subscrevê-la a partir da sua página de subscrição no EBP.",
         "network": "Erro de rede, tente novamente."
       },
       "capture": {
@@ -186,6 +187,7 @@
         "addImage": "Adicionar uma imagem",
         "removeImage": "Remover a imagem",
         "help": "O jogo (After-H ou Color Chaos) é captado pela sua janela e ocupa todo o quadro; a sua imagem aparece aqui durante a gravação. Arraste a webcam e as imagens para as mover, redimensione-as pelo canto inferior direito e depois aplique.",
+        "subscriptionSuspended": "Gravação suspensa: a subscrição Arena desta sala não está ativa. Será retomada automaticamente assim que o gerente regularizar a subscrição no EBP.",
         "webcamSuspended": "A webcam está indisponível: a gravação continua sem ela e será reintegrada assim que reaparecer.",
         "cancel": "Cancelar",
         "apply": "Aplicar",

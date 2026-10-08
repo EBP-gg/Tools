@@ -158,6 +158,7 @@
         "unknownArena": "Sală sau arenă necunoscută.",
         "invalidKey": "Cheie invalidă.",
         "alreadyRegistered": "O altă mașină este deja înregistrată pentru această arenă.",
+        "subscriptionInactive": "Abonamentul Arena al acestei săli nu este activ. Administratorul îl poate activa din pagina sa de abonament pe EBP.",
         "network": "Eroare de rețea, încercați din nou."
       },
       "capture": {
@@ -186,6 +187,7 @@
         "addImage": "Adaugă o imagine",
         "removeImage": "Elimină imaginea",
         "help": "Jocul (After-H sau Color Chaos) este capturat din fereastra sa și ocupă tot cadrul; imaginea lui apare aici în timpul înregistrării. Trageți webcam-ul și imaginile pentru a le muta, redimensionați-le din colțul din dreapta jos, apoi aplicați.",
+        "subscriptionSuspended": "Înregistrare suspendată: abonamentul Arena al acestei săli nu este activ. Va fi reluată automat imediat ce administratorul reglementează abonamentul pe EBP.",
         "webcamSuspended": "Webcam-ul este indisponibil: înregistrarea continuă fără el și va fi reintegrat imediat ce reapare.",
         "cancel": "Anulează",
         "apply": "Aplică",
