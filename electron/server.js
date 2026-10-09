@@ -142,11 +142,11 @@ const telemetryService = require('./services/telemetry-service');
 // démarrent seuls au `require` et vérifient eux-mêmes si le mode salle est actif.
 require('./services/arena-eva-poller-service');
 require('./services/arena-identify-service');
-// Mise à jour ordonnée par un admin (via la réponse du heartbeat) : arrêt
-// propre de la captation (segment finalisé) puis update forcée sans dialogue —
-// l'installeur Squirrel relance l'app, qui reprend tout au boot.
+// Mise à jour ordonnée par un admin (via la réponse du heartbeat) : update
+// forcée sans dialogue. Elle n'arrête la captation qu'au moment d'installer —
+// un ordre sans effet (déjà à jour, GitHub injoignable) la laisse tourner —,
+// et l'installeur Squirrel relance l'app, qui reprend tout au boot.
 arenaModeService.setUpdateHandler(() => {
-    arenaCaptureService.stopCapture();
     UPDATE_SERVICE.forceUpdate();
 });
 // Abonnement Arena inactif (402 au battement) : captation suspendue, reprise

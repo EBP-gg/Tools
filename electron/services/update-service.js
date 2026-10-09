@@ -251,6 +251,11 @@ class UpdateService {
      * par un admin via le heartbeat, à exécuter immédiatement (le PC de salle
      * tourne sans humain ; sous Windows l'installeur Squirrel est silencieux
      * et relance l'app tout seul). No-op si déjà à jour ou en dev.
+     *
+     * La captation n'est arrêtée qu'une fois l'installation décidée : un ordre
+     * qui tourne court (déjà à jour, GitHub injoignable, téléchargement raté)
+     * ne doit pas laisser la salle sans enregistrement, car rien ne la
+     * relancerait avant le prochain démarrage.
      */
     forceUpdate() {
         if (IS_DEV_MODE || this.localVersion.startsWith('0')) return;
@@ -268,6 +273,7 @@ class UpdateService {
                 `[update] forced update → ${this.pendingVersion} already ` +
                     'downloaded, waiting for the machine to be free'
             );
+            arenaCaptureService.stopCapture();
             this.#applyOnceFree(FORCED_WAIT_MS);
             return;
         }
@@ -285,7 +291,7 @@ class UpdateService {
                 target: this.githubVersion,
                 forced: true
             });
-            this.#downloadAndInstall(NAMES);
+            this.#downloadAndInstall(NAMES, true);
         });
     }
 
@@ -301,11 +307,19 @@ class UpdateService {
      * @param {number} timeoutMs Au-delà, on applique quand même.
      */
     #applyOnceFree(timeoutMs) {
+        this.#whenFree(timeoutMs, () => {
+            if (this.pendingVersion) this.applyPendingUpdate();
+        });
+    }
+
+    /**
+     * Exécute `action` dès que le poste est libre, ou au plus tard après
+     * `timeoutMs`.
+     */
+    #whenFree(timeoutMs, action) {
         const DEADLINE = Date.now() + timeoutMs;
 
         const TICK = () => {
-            if (!this.pendingVersion) return;
-
             if (activityTracker.isBusy() && Date.now() < DEADLINE) {
                 setTimeout(TICK, FORCED_POLL_MS);
                 return;
@@ -317,7 +331,7 @@ class UpdateService {
                         `${timeoutMs / 1000}s, applying anyway`
                 );
             }
-            this.applyPendingUpdate();
+            action();
         };
 
         TICK();
@@ -349,8 +363,12 @@ class UpdateService {
      * Télécharge l'installeur de `githubVersion` puis le lance et quitte
      * l'app. Partagé entre le flux interactif (autoUpdate) et le flux forcé
      * du mode salle.
+     *
+     * @param {boolean} stopCapture Mode salle : la captation tourne pendant le
+     * téléchargement et n'est arrêtée qu'une fois l'installeur sur le disque,
+     * en laissant à ffmpeg le temps de finaliser son segment.
      */
-    #downloadAndInstall({ githubFileName, localFileName }) {
+    #downloadAndInstall({ githubFileName, localFileName }, stopCapture = false) {
         const FILE_URL = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${this.githubVersion}/${githubFileName}`;
         const DESTINATION_PATH = path.join(
             app.getPath('userData'),
@@ -368,7 +386,7 @@ class UpdateService {
             });
         };
 
-        this.#download(FILE_URL, DESTINATION_PATH, () => {
+        const INSTALL = () => {
             switch (os.platform()) {
                 case 'win32':
                     spawn(DESTINATION_PATH, {
@@ -395,6 +413,15 @@ class UpdateService {
             }
 
             app.quit();
+        };
+
+        this.#download(FILE_URL, DESTINATION_PATH, () => {
+            if (!stopCapture) {
+                INSTALL();
+                return;
+            }
+            arenaCaptureService.stopCapture();
+            this.#whenFree(FORCED_WAIT_MS, INSTALL);
         }, ON_ERROR);
     }
 
@@ -451,6 +478,18 @@ class UpdateService {
                         telemetryService.reportUpdate('update_available', {
                             target: this.githubVersion
                         });
+
+                        // Un PC de salle tourne sans personne devant : la
+                        // question resterait sans réponse, et se réempilerait
+                        // toutes les quatre heures. La mise à jour passe alors
+                        // par l'ordre d'un admin (`forceUpdate`).
+                        if (arenaModeService.getState().registered) {
+                            console.log(
+                                `[update] ${this.githubVersion} available, ` +
+                                    'no dialog in arena mode — waiting for an admin order'
+                            );
+                            return;
+                        }
 
                         const { response } = await dialog.showMessageBox(
                             getMainWindow(),
