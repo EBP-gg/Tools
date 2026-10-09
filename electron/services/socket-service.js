@@ -56,6 +56,8 @@ const ARENA_RETRY_MS = 60 * 1000;
  *          onDelete: (folder: string, name: string) => {deleted:boolean, reason?:string},
  *          onFrame: () => {image: string|null, reason?: string},
  *          onUpdate: () => void,
+ *          onCapture: (action: string) => object,
+ *          onRestart: () => void,
  *          onConnect?: () => void}} handlers
  */
 function connectArena(state, handlers) {
@@ -115,6 +117,19 @@ function connectArena(state, handlers) {
     arenaSocket.on('arena_frame', (data, ack) => {
         if (typeof ack !== 'function') return;
         ack(handlers.onFrame());
+    });
+    // Captation démarrée ou coupée par un admin. Acquittée avec l'état qui en
+    // résulte : un démarrage peut être bloqué (abonnement, disque), l'admin doit
+    // le savoir plutôt que de croire la salle repartie.
+    arenaSocket.on('arena_capture', (data, ack) => {
+        if (typeof ack !== 'function') return;
+        ack(handlers.onCapture((data && data.action) || ''));
+    });
+    // Redémarrage ordonné par un admin. Acquitté AVANT d'agir : une fois Tools
+    // arrêté, il n'y aurait plus personne pour répondre.
+    arenaSocket.on('arena_restart', (data, ack) => {
+        if (typeof ack === 'function') ack({ restarting: true });
+        handlers.onRestart();
     });
     arenaSocket.on('arena_delete', (data, ack) => {
         if (typeof ack !== 'function') return;

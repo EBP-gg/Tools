@@ -353,26 +353,7 @@ function createWindow(updateService) {
                 submenu: [
                     {
                         label: 'Confirm restart',
-                        click: () => {
-                            // Une mise à jour téléchargée attend ? Il faut
-                            // passer par Squirrel. `app.relaunch()` relancerait
-                            // `process.execPath`, c'est-à-dire l'exécutable
-                            // VERSIONNÉ de l'installation courante
-                            // (app-1.8.83/ebp-tools.exe) — donc l'ancienne
-                            // version, en laissant croire que la mise à jour a
-                            // échoué. Seul le lanceur, à la racine, bascule sur
-                            // la version la plus récente.
-                            if (updateService.pendingVersion) {
-                                updateService.applyPendingUpdate();
-                                return;
-                            }
-
-                            app.relaunch();
-                            if (mainWindow && !mainWindow.isDestroyed()) {
-                                mainWindow.destroy();
-                            }
-                            app.quit();
-                        }
+                        click: () => restartApp(updateService)
                     }
                 ]
             },
@@ -618,7 +599,31 @@ function setDebugMode(mode) {
     debugMode = mode;
 }
 
+/**
+ * Redémarre Tools (tray « Confirm restart », ou ordre d'un admin en mode salle).
+ * @param {import('../services/update-service')} updateService
+ */
+function restartApp(updateService) {
+    // Une mise à jour téléchargée attend ? Il faut passer par Squirrel.
+    // `app.relaunch()` relancerait `process.execPath`, c'est-à-dire
+    // l'exécutable VERSIONNÉ de l'installation courante
+    // (app-1.8.83/ebp-tools.exe) — donc l'ancienne version, en laissant croire
+    // que la mise à jour a échoué. Seul le lanceur, à la racine, bascule sur la
+    // version la plus récente.
+    if (updateService.pendingVersion) {
+        updateService.applyPendingUpdate();
+        return;
+    }
+
+    app.relaunch();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.destroy();
+    }
+    app.quit();
+}
+
 module.exports = {
+    restartApp,
     setWindowSize,
     createFloatingWindow,
     deleteFloatingWindow,

@@ -104,7 +104,8 @@ const {
     getMainWindow,
     setDebugMode,
     hideMainWindow,
-    showMainWindow
+    showMainWindow,
+    restartApp
 } = require('./core/window-manager');
 const StorageManager = require('./core/storage-manager');
 const socketEmit = require('./services/socket-service');
@@ -188,6 +189,40 @@ arenaModeService.setStatusProvider(() => {
             diskFreeBytes: CAPTURE.diskFreeBytes
         }
     };
+});
+// Commandes d'un admin (page « Tools - salles ») : démarrer ou couper la
+// captation, redémarrer Tools. La coupure n'est pas mémorisée — comme le bouton
+// Arrêter local, le prochain démarrage de Tools relance la captation.
+arenaModeService.setRemoteControl({
+    capture: (action) => {
+        console.log(`[arena-mode] admin order: capture ${action}`);
+        let status;
+        if (action === 'start') status = arenaCaptureService.startCapture();
+        else if (action === 'stop') status = arenaCaptureService.stopCapture();
+        else return { error: 'unknown action' };
+        return {
+            wanted: action === 'start',
+            running: status.running,
+            waitingGame: status.waitingGame,
+            suspended: status.suspended,
+            diskLow: status.diskLow
+        };
+    },
+    restart: () => {
+        console.log('[arena-mode] admin order: restart');
+        // ffmpeg finalise son segment après le 'q' : on lui en laisse le temps,
+        // sinon le redémarrage le couperait en pleine écriture.
+        arenaCaptureService.stopCapture();
+        const DEADLINE = Date.now() + 15 * 1000;
+        const WAIT = () => {
+            if (arenaCaptureService.getStatus().running && Date.now() < DEADLINE) {
+                setTimeout(WAIT, 500);
+                return;
+            }
+            restartApp(UPDATE_SERVICE);
+        };
+        WAIT();
+    }
 });
 const {
     ApiError,

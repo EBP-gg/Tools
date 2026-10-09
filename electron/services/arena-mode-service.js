@@ -59,6 +59,9 @@ let lastUpdateAttemptAt = 0;
 // Fournisseur de l'état local remonté dans le battement (posé par server.js) :
 // évite un require croisé, arena-pipeline-service requérant déjà ce module.
 let statusProvider = null;
+// Commandes distantes (captation, redémarrage), posées par server.js pour la
+// même raison.
+let remoteControl = null;
 // Fichier en cours de remontée, `null` si aucun. Sert à deux choses : un seul
 // ordre à la fois (sans ce verrou, un ordre lent serait relancé en parallèle de
 // lui-même, les battements étant déclenchés par les changements de fichier), et
@@ -94,6 +97,17 @@ function setSubscriptionInactive(value) {
     if (value && !subscriptionInactive) reconnectArena();
     subscriptionInactive = value;
     if (subscriptionHandler) subscriptionHandler(value);
+}
+
+/**
+ * Pose les commandes que l'admin peut déclencher à distance sur la captation
+ * et sur Tools lui-même. Posées par server.js, comme le statusProvider : les
+ * services concernés requièrent déjà celui-ci, un require croisé serait
+ * circulaire.
+ * @param {{capture: (action: string) => object, restart: () => void}} control
+ */
+function setRemoteControl(control) {
+    remoteControl = control;
 }
 
 /**
@@ -422,6 +436,11 @@ function startHeartbeat() {
         onDelete: deleteFile,
         onFrame: readPreviewFrame,
         onUpdate: runUpdate,
+        onCapture: (action) =>
+            remoteControl ? remoteControl.capture(action) : { error: 'unavailable' },
+        onRestart: () => {
+            if (remoteControl) remoteControl.restart();
+        },
         // Le serveur refuse le canal tant que l'abonnement est inactif : s'il
         // l'accepte de nouveau, la salle a payé. Battement immédiat pour
         // reprendre la captation sans attendre le périodique (20 min).
@@ -517,5 +536,6 @@ module.exports = {
     setUpdateHandler,
     setSubscriptionHandler,
     setStatusProvider,
+    setRemoteControl,
     notifyChange
 };
