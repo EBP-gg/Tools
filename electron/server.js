@@ -2316,7 +2316,6 @@ if (!APP_GOT_THE_LOCK) {
         // si le mode n'est pas actif sur cette machine), reprise de la
         // captation si un périphérique est configuré, et consommateur du spool
         // (segments → games découpées).
-        arenaModeService.startHeartbeat();
         if (arenaModeService.getState().registered) {
             // En dev, on ne démarre pas la captation au boot (évite d'accaparer
             // la caméra/OBS pendant le développement) — elle reste lançable à la
@@ -2331,6 +2330,9 @@ if (!APP_GOT_THE_LOCK) {
                 console.error('[arena-pipeline] failed to start', e);
             }
         }
+        // Après autoStart : le premier battement part tout de suite, et c'est
+        // startCapture qui mesure l'espace disque qu'il remonte.
+        arenaModeService.startHeartbeat();
 
         if (IS_DEV_MODE) {
             // We wait until the Angular server is ready before creating the window that will contain the HMI.
