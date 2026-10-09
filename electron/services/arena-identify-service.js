@@ -27,7 +27,8 @@ const { resolveArenaGameId } = require('./tools-api-client');
 // 6, et inversement) : chaque service ne voit que ce qui le concerne.
 //
 // Une game qu'EBP n'identifie pas reste découpée dans `games/` et sera
-// re-proposée au tour suivant — un admin peut donc la récupérer à la main —
+// re-proposée (à chaque tour la première heure, puis toutes les OLD_RETRY_MS)
+// — un admin peut donc la récupérer à la main —
 // mais pas indéfiniment : passé PENDING_MAX_AGE_S après sa fin, elle est
 // supprimée. Sans ça, les games d'intersalle (jamais rattachées à ce terrain)
 // s'accumulent sur le disque, et chaque tour les renvoie toutes au resolve, dont
@@ -41,11 +42,21 @@ const TICK_MS = 60 * 1000;
 // Au-delà, une game toujours pas identifiée ne le sera plus : EBP ne la connaît
 // pas pour ce terrain (intersalle, game jamais remontée).
 const PENDING_MAX_AGE_S = 7 * 24 * 60 * 60;
+// Une game récente est re-soumise à chaque tour : c'est le cas normal, EBP la
+// connaît dans la minute. Au-delà, elle n'est re-soumise que toutes les
+// OLD_RETRY_MS — sinon chaque game en souffrance (intersalle surtout) coûte un
+// appel par minute, et une trentaine suffit à faire tomber le resolve en 429.
+const RECENT_MAX_AGE_S = 60 * 60;
+const OLD_RETRY_MS = 30 * 60 * 1000;
 // Nom provisoire écrit par le pipeline : 6 champs, pas de gameId.
 const PENDING_RE =
     /^(\d+)_(\d+)_([A-Za-z0-9-]+)_(\d+)_(\d+)_([^_]+)\.mp4$/;
 
 let ticking = false;
+// Dernière réponse d'EBP par fichier (ms). En mémoire seulement : un redémarrage
+// re-soumet tout une fois, sans conséquence. Un fichier non atteint (tour
+// interrompu par un échec réseau / 429) n'y entre pas et passe au tour suivant.
+const lastAnsweredAt = new Map();
 
 /** Insère le gameId en 3e position : nom provisoire → nom identifié. */
 function buildIdentifiedName(pendingName, gameId) {
@@ -85,13 +96,22 @@ async function tick() {
         const END_EPOCH = parseInt(M[5], 10);
         const MAP = M[3];
 
-        if (Date.now() / 1000 - END_EPOCH > PENDING_MAX_AGE_S) {
+        const AGE_S = Date.now() / 1000 - END_EPOCH;
+        if (AGE_S > PENDING_MAX_AGE_S) {
+            lastAnsweredAt.delete(NAME);
             try {
                 fs.unlinkSync(path.join(DIR, NAME));
                 console.log(`[arena-identify] expired, deleted — ${NAME}`);
             } catch (e) {
                 console.error('[arena-identify] delete failed:', NAME, e.message);
             }
+            continue;
+        }
+
+        if (
+            AGE_S > RECENT_MAX_AGE_S &&
+            Date.now() - (lastAnsweredAt.get(NAME) ?? 0) < OLD_RETRY_MS
+        ) {
             continue;
         }
 
@@ -112,6 +132,7 @@ async function tick() {
             console.warn('[arena-identify] resolve failed:', e.message);
             return;
         }
+        lastAnsweredAt.set(NAME, Date.now());
 
         if (!res || res.gameId == null) {
             console.log(
@@ -123,6 +144,7 @@ async function tick() {
         const IDENTIFIED = buildIdentifiedName(NAME, res.gameId);
         try {
             renameGame(DIR, NAME, IDENTIFIED);
+            lastAnsweredAt.delete(NAME);
             console.log(`[arena-identify] ${NAME} → EVA game ${res.gameId}`);
         } catch (e) {
             console.error('[arena-identify] rename failed:', NAME, e.message);
