@@ -79,7 +79,7 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const ExcelJS = require('exceljs');
-require('./discord-rpc');
+const discordRpc = require('./discord-rpc');
 const util = require('util');
 // `execFile` plutôt que `exec` : l'exécutable et ses arguments sont passés en
 // argv, donc aucun caractère d'un chemin ou d'une URL ne peut être réinterprété
@@ -2804,6 +2804,7 @@ if (!APP_GOT_THE_LOCK) {
                     // déjà, il verra le mode actif au tour suivant.
                     arenaPipelineService.start({ runAnalyzer });
                     arenaUploaderService.start();
+                    discordRpc.setActivity();
                     return { success: true, state: STATE };
                 } catch (e) {
                     console.error('[arena-mode] register failed:', e.message);
@@ -2824,7 +2825,9 @@ if (!APP_GOT_THE_LOCK) {
             arenaCaptureService.stopCapture();
             arenaPipelineService.stop();
             arenaUploaderService.stop();
-            return arenaModeService.unregister();
+            const STATE = arenaModeService.unregister();
+            discordRpc.setActivity();
+            return STATE;
         });
 
         // The front-end asks the server to list the webcams usable in the scene.
@@ -2989,6 +2992,7 @@ if (!APP_GOT_THE_LOCK) {
             const SETTINGS = StorageManager.permanentSettings;
             SETTINGS['language'] = language;
             StorageManager.permanentSettings = SETTINGS;
+            discordRpc.setActivity();
         });
 
         ipcMain.handle(
@@ -3174,5 +3178,6 @@ if (!APP_GOT_THE_LOCK) {
     // `quitAndInstall` : le 'q' part tout de suite, ffmpeg finalise seul.
     app.on('will-quit', () => {
         arenaCaptureService.stopCapture();
+        discordRpc.destroy();
     });
 })();

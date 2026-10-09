@@ -1,5 +1,9 @@
 {
     "watchFolder": {
         "notAuthenticated": "Nessun account associato: avvia un'analisi da evabattleplan.com per collegare Tools al tuo account."
+    },
+    "discordRpc": {
+        "details": "Lavoro sulle mie statistiche...",
+        "arenaDetails": "Registra le partite in sala"
     }
 }

@@ -1,5 +1,9 @@
 {
     "watchFolder": {
         "notAuthenticated": "No linked account: start an analysis from evabattleplan.com to link Tools to your account."
+    },
+    "discordRpc": {
+        "details": "Working on my stats...",
+        "arenaDetails": "Recording games at a venue"
     }
 }
