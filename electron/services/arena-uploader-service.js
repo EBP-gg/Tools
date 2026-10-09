@@ -70,6 +70,9 @@ const RETRY_MAX_DELAY_MS = 10 * 60 * 1000;
 // Re-scan périodique de games/ : rattrape les games identifiées par un simple
 // renommage, que chokidar peut ne pas ré-émettre.
 const RETRY_SCAN_MS = 2 * 60 * 1000;
+// Au-delà, une game de failed/ ne servira plus : aucun import ne peut s'y
+// rattacher passé ce délai, comme pour les games jamais identifiées.
+const FAILED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 let watcher = null;
 let retryTimer = null;
@@ -100,6 +103,37 @@ function moveToFailed(filePath) {
         fs.renameSync(filePath, path.join(FAILED, path.basename(filePath)));
     } catch (e) {
         console.error('[arena-uploader] move to failed failed:', filePath, e.message);
+    }
+}
+
+/** Supprime les fichiers de failed/ plus vieux que FAILED_MAX_AGE_MS. */
+function purgeFailed() {
+    const FAILED = getFailedDir();
+    let entries;
+    try {
+        entries = fs.readdirSync(FAILED);
+    } catch (_) {
+        return;
+    }
+    for (const NAME of entries) {
+        const FILE = path.join(FAILED, NAME);
+        try {
+            const STAT = fs.statSync(FILE);
+            if (!STAT.isFile() || Date.now() - STAT.mtimeMs < FAILED_MAX_AGE_MS) continue;
+            fs.unlinkSync(FILE);
+            console.log(`[arena-uploader] failed/ expired, deleted — ${NAME}`);
+        } catch (e) {
+            console.error('[arena-uploader] failed/ purge failed:', NAME, e.message);
+        }
+    }
+}
+
+/** Nombre de fichiers dans failed/ (0 si le dossier n'existe pas). */
+function countFailed() {
+    try {
+        return fs.readdirSync(getFailedDir()).length;
+    } catch (_) {
+        return 0;
     }
 }
 
@@ -338,8 +372,12 @@ function enqueue(filePath) {
     );
 }
 
-/** Re-scan de games/ : ré-enfile les games identifiées (hors sous-dossiers). */
+/**
+ * Re-scan de games/ : ré-enfile les games identifiées (hors sous-dossiers), et
+ * purge failed/ au passage.
+ */
 function rescanGames() {
+    purgeFailed();
     const DIR = getGamesDir();
     let entries;
     try {
@@ -398,6 +436,7 @@ function getStatus() {
         queued: QUEUE.length,
         currentFile: currentFile ? path.basename(currentFile) : null,
         uploadedCount,
+        failedCount: countFailed(),
         lastError
     };
 }

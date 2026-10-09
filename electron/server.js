@@ -155,15 +155,38 @@ arenaModeService.setSubscriptionHandler((inactive) =>
     arenaCaptureService.setSuspended(inactive)
 );
 // État local remonté par le battement (captation + contenu de spool/ et
-// games/). Posé ici plutôt que requis par arena-mode-service : le pipeline
-// requiert déjà ce dernier, un require croisé serait circulaire.
+// games/ + santé de la chaîne). Posé ici plutôt que requis par
+// arena-mode-service : le pipeline requiert déjà ce dernier, un require croisé
+// serait circulaire.
 arenaModeService.setStatusProvider(() => {
     const CAPTURE = arenaCaptureService.getStatus();
+    const PIPELINE = arenaPipelineService.getStatus();
+    const UPLOADER = arenaUploaderService.getStatus();
     return {
         recording: CAPTURE.running,
         spoolFolder: CAPTURE.spoolFolder,
-        gamesFolder: arenaPipelineService.getStatus().gamesFolder,
-        previewPath: CAPTURE.previewPath
+        gamesFolder: PIPELINE.gamesFolder,
+        previewPath: CAPTURE.previewPath,
+        health: {
+            capture: {
+                waitingGame: CAPTURE.waitingGame,
+                suspended: CAPTURE.suspended,
+                diskLow: CAPTURE.diskLow,
+                encoder: CAPTURE.encoder,
+                lastError: CAPTURE.lastError
+            },
+            pipeline: {
+                lastRoundAt: PIPELINE.lastRoundAt,
+                lastError: PIPELINE.lastError
+            },
+            uploader: {
+                queued: UPLOADER.queued,
+                uploadedCount: UPLOADER.uploadedCount,
+                failedCount: UPLOADER.failedCount,
+                lastError: UPLOADER.lastError
+            },
+            diskFreeBytes: CAPTURE.diskFreeBytes
+        }
     };
 });
 const {

@@ -126,6 +126,13 @@ const WEBCAM_RETRY_MAX_MS = 30 * 60 * 1000;
 // Attente de la fenêtre du jeu : c'est le délai de démarrage d'une game après
 // l'ouverture du jeu, il doit rester court (l'analyseur a besoin du début).
 const GAME_POLL_MS = 3000;
+// Garde-fou disque : sous ce seuil d'espace libre sur le volume du spool, la
+// captation s'arrête (~2 h de marge à 4,5 Go/h) — un PC de streaming au disque
+// plein ferait tomber bien plus que l'enregistrement. Elle reprend seule
+// au-dessus du seuil de reprise, plus haut pour ne pas osciller.
+const DISK_LOW_BYTES = 10 * 1024 ** 3;
+const DISK_RESUME_BYTES = 15 * 1024 ** 3;
+const DISK_CHECK_MS = 60 * 1000;
 
 let ffmpegProcess = null;
 let stopRequested = false;
@@ -166,6 +173,10 @@ let suspended = false;
 // cherchée) : c'est ce drapeau qui décide de la reprise au retour de
 // l'abonnement. Un arrêt manuel pendant la suspension l'annule donc.
 let captureWanted = false;
+// Espace libre du volume du spool sous DISK_LOW_BYTES : captation arrêtée, comme
+// pour `suspended`, et reprise au-dessus de DISK_RESUME_BYTES.
+let diskLow = false;
+let diskFreeBytes = null;
 
 function getSpoolFolder() {
     return StorageManager.getPermanentSettingsValue(
@@ -502,7 +513,8 @@ function killOrphanCaptures(spool) {
  */
 function startCapture(gameFound = false) {
     captureWanted = true;
-    if (suspended) return getStatus();
+    checkDisk();
+    if (suspended || diskLow) return getStatus();
     if (ffmpegProcess) return getStatus();
 
     const SPOOL = getSpoolFolder();
@@ -945,15 +957,61 @@ function getSceneView() {
 function setSuspended(value) {
     if (value === suspended) return;
     if (value) {
-        const WANTED = captureWanted;
         console.warn('[arena-capture] abonnement Arena inactif — captation suspendue');
+    } else {
+        console.log('[arena-capture] abonnement Arena actif — fin de la suspension');
+    }
+    setBlocked(() => {
+        suspended = value;
+    });
+}
+
+/**
+ * Mesure l'espace libre du volume du spool et pose ou lève le garde-fou disque.
+ * Appelé périodiquement et à chaque démarrage de la captation.
+ */
+function checkDisk() {
+    const SPOOL = getSpoolFolder();
+    try {
+        // Le spool peut ne pas encore exister : on mesure alors son parent.
+        const TARGET = fs.existsSync(SPOOL) ? SPOOL : path.dirname(SPOOL);
+        const STATS = fs.statfsSync(TARGET);
+        diskFreeBytes = STATS.bavail * STATS.bsize;
+    } catch (e) {
+        console.error('[arena-capture] disk check failed:', e.message);
+        return;
+    }
+    const GB = (diskFreeBytes / 1024 ** 3).toFixed(1);
+    if (!diskLow && diskFreeBytes < DISK_LOW_BYTES) {
+        console.warn(`[arena-capture] disque presque plein (${GB} Go libres) — captation suspendue`);
+        setBlocked(() => {
+            diskLow = true;
+        });
+    } else if (diskLow && diskFreeBytes > DISK_RESUME_BYTES) {
+        console.log(`[arena-capture] espace disque revenu (${GB} Go libres) — fin de la suspension`);
+        setBlocked(() => {
+            diskLow = false;
+        });
+    }
+}
+
+/**
+ * Applique un changement de l'une des causes de blocage (abonnement, disque) :
+ * arrête la captation quand la première apparaît, la reprend quand la dernière
+ * disparaît, si elle était voulue.
+ * @param {() => void} update Modifie `suspended` ou `diskLow`.
+ */
+function setBlocked(update) {
+    const WAS_BLOCKED = suspended || diskLow;
+    update();
+    const IS_BLOCKED = suspended || diskLow;
+    if (WAS_BLOCKED === IS_BLOCKED) return;
+    if (IS_BLOCKED) {
+        const WANTED = captureWanted;
         stopCapture();
-        suspended = true;
         captureWanted = WANTED;
         return;
     }
-    suspended = false;
-    console.log('[arena-capture] abonnement Arena actif — fin de la suspension');
     if (!captureWanted) return;
     // L'ffmpeg arrêté par la suspension peut encore finaliser son segment :
     // startCapture n'en lancerait pas un second, on reprend à sa fermeture.
@@ -987,6 +1045,9 @@ function getStatus() {
         webcamSuspended,
         // Abonnement Arena inactif : rien n'est filmé, cf. setSuspended.
         suspended,
+        // Disque presque plein : rien n'est filmé, cf. checkDisk.
+        diskLow,
+        diskFreeBytes,
         encoder: resolvedEncoder ? resolvedEncoder.name : null,
         startedAt,
         lastError,
@@ -995,6 +1056,12 @@ function getStatus() {
         previewPath: getPreviewPath()
     };
 }
+
+// Le garde-fou ne concerne que le mode salle : hors captation voulue, l'espace
+// disque d'un utilisateur ordinaire ne nous regarde pas.
+setInterval(() => {
+    if (captureWanted) checkDisk();
+}, DISK_CHECK_MS).unref();
 
 module.exports = {
     listWebcams,

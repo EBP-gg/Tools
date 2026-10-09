@@ -125,8 +125,25 @@ function listFiles(dir) {
 }
 
 /**
+ * Taille cumulée des fichiers d'un dossier, en octets (0 si absent ou
+ * illisible, comme listFiles).
+ */
+function folderBytes(dir) {
+    if (!dir) return 0;
+    try {
+        return fs
+            .readdirSync(dir, { withFileTypes: true })
+            .filter((e) => e.isFile())
+            .reduce((sum, e) => sum + fs.statSync(path.join(dir, e.name)).size, 0);
+    } catch (_) {
+        return 0;
+    }
+}
+
+/**
  * État local remonté au backend : captation en cours, games en attente de
- * traitement/upload et segments encore dans le spool.
+ * traitement/upload, segments encore dans le spool, et santé de la chaîne
+ * (dernières erreurs, file d'envoi, espace disque) pour le suivi du parc.
  */
 function collectLocalState() {
     if (!statusProvider) return { recording: false, pendingGames: [], spool: [] };
@@ -134,15 +151,19 @@ function collectLocalState() {
     return {
         recording: !!STATUS.recording,
         pendingGames: listFiles(STATUS.gamesFolder),
-        spool: listFiles(STATUS.spoolFolder)
+        spool: listFiles(STATUS.spoolFolder),
+        health: {
+            ...STATUS.health,
+            spoolBytes: folderBytes(STATUS.spoolFolder)
+        }
     };
 }
 
 /**
  * Envoie un battement si le mode salle est actif. Fire-and-forget : un échec
  * ponctuel (réseau, backend down) est loggé et rattrapé au battement suivant.
- * Monte la version de Tools, l'état de la captation et le contenu de spool/ et
- * games/ (debug à distance) ; si la réponse porte un ordre de mise à jour, il
+ * Monte la version de Tools, l'état de la captation, le contenu de spool/ et
+ * games/ et la santé de la chaîne (debug à distance) ; si la réponse porte un ordre de mise à jour, il
  * est exécuté IMMÉDIATEMENT (décision Antoine : l'admin coordonne avec la
  * salle par téléphone, pas de garde-fou côté Tools).
  */
