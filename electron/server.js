@@ -186,6 +186,7 @@ arenaModeService.setStatusProvider(() => {
                 failedCount: UPLOADER.failedCount,
                 lastError: UPLOADER.lastError
             },
+            update: telemetryService.getUpdateHealth(),
             diskFreeBytes: CAPTURE.diskFreeBytes
         }
     };

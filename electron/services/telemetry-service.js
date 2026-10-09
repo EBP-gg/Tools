@@ -26,6 +26,10 @@ const { version: TOOLS_VERSION } = require('../../package.json');
  */
 const ENABLED_KEY = 'telemetryEnabled';
 const INSTALL_ID_KEY = 'telemetryInstallId';
+// Dernier échec de mise à jour, remonté par le battement de salle. Persistant :
+// l'événement de télémétrie peut se perdre (réseau, limite de débit), le
+// battement le représente tant que la mise à jour n'a pas abouti.
+const UPDATE_HEALTH_KEY = 'updateHealth';
 
 /**
  * Version du système, pas seulement sa famille : distinguer Windows 10 de
@@ -134,7 +138,43 @@ function reportLaunch() {
  * @param {object} [detail] Target version, failure reason...
  */
 function reportUpdate(event, detail) {
+    // Noté même télémétrie coupée : il ne part que par le battement de salle,
+    // canal authentifié que l'utilisateur ne peut pas désactiver.
+    if (event === 'update_failed') recordUpdateFailure(detail);
     send(event, detail);
+}
+
+/**
+ * Mémorise un échec de mise à jour, en comptant les échecs successifs depuis
+ * la version courante.
+ * @param {{target?: string, reason?: string}} [detail]
+ */
+function recordUpdateFailure(detail) {
+    const PREVIOUS = getUpdateHealth();
+    StorageManager.setPermanentSettingsValue(UPDATE_HEALTH_KEY, {
+        from: TOOLS_VERSION,
+        target: (detail && detail.target) || null,
+        reason: (detail && detail.reason) || null,
+        at: Date.now(),
+        failures: (PREVIOUS ? PREVIOUS.failures : 0) + 1
+    });
+}
+
+/**
+ * Dernier échec de mise à jour, ou null. Un échec noté sous une autre version
+ * est oublié : la version a changé depuis, la mise à jour a donc fini par
+ * passer.
+ * @returns {{from: string, target: string|null, reason: string|null,
+ *   at: number, failures: number}|null}
+ */
+function getUpdateHealth() {
+    const HEALTH = StorageManager.getPermanentSettingsValue(UPDATE_HEALTH_KEY);
+    if (!HEALTH) return null;
+    if (HEALTH.from !== TOOLS_VERSION) {
+        StorageManager.setPermanentSettingsValue(UPDATE_HEALTH_KEY, null);
+        return null;
+    }
+    return HEALTH;
 }
 
 //#endregion
@@ -143,5 +183,6 @@ module.exports = {
     isEnabled,
     setEnabled,
     reportLaunch,
-    reportUpdate
+    reportUpdate,
+    getUpdateHealth
 };
