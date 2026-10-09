@@ -15,7 +15,8 @@ const {
     confirmOtherGameUpload,
     resolveColorChaosGameId,
     confirmArenaUpload,
-    uploadFileToPresignedUrl
+    uploadFileToPresignedUrl,
+    ApiError
 } = require('./tools-api-client');
 
 //#endregion
@@ -45,6 +46,13 @@ const {
 // tentative, backoff 30 s → 10 min, à l'infini). La clé S3 étant déterministe,
 // un retry réécrit le même objet — aucun doublon possible. Sérialisé : une seule
 // game à la fois (protection CPU).
+//
+// Un REFUS du serveur (4xx hors 408/429, ex. 404 « Unknown game ») ne se règle
+// pas en réessayant tout de suite : relancé sur place, il bloquerait toutes les
+// games suivantes, puis la captation via le garde-fou disque. La game repart en
+// fin de file (le re-scan la reprend) et part dans failed/ passé
+// REFUSED_MAX_AGE_MS. Pas dès le premier refus : un 404 peut n'être qu'un retard
+// d'import de la game côté EBP.
 
 // Nom d'une game IDENTIFIÉE (7 champs, gameId en 3e position) :
 // {roomId}_{arenaId}_{gameId}_{SafeMap}_{start}_{end}_{scores}.mp4
@@ -73,6 +81,9 @@ const RETRY_SCAN_MS = 2 * 60 * 1000;
 // Au-delà, une game de failed/ ne servira plus : aucun import ne peut s'y
 // rattacher passé ce délai, comme pour les games jamais identifiées.
 const FAILED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Âge (depuis la découpe) au-delà duquel une game encore refusée est abandonnée :
+// l'import EBP a eu largement le temps de passer.
+const REFUSED_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 let watcher = null;
 let retryTimer = null;
@@ -156,6 +167,21 @@ function cleanup(filePath) {
 }
 
 /**
+ * Refus définitif du serveur : le rejouer à l'identique donnera la même réponse.
+ * 401/403 (clé de salle refusée) n'en est pas un ici : ils lèvent
+ * NotAuthenticatedError, qui touche toutes les games et se règle côté admin.
+ */
+function isRefusal(e) {
+    return (
+        e instanceof ApiError &&
+        e.status >= 400 &&
+        e.status < 500 &&
+        e.status !== 408 &&
+        e.status !== 429
+    );
+}
+
+/**
  * Boucle de retry persistante. `attempt` doit faire l'aller-retour COMPLET
  * (URL fraîche + PUT) : c'est ce qui rend le retry sûr, l'URL présignée d'une
  * tentative ratée pouvant avoir expiré.
@@ -168,6 +194,7 @@ async function withPersistentRetry(attempt) {
             return await attempt();
         } catch (e) {
             lastError = e.message;
+            if (isRefusal(e)) throw e;
             console.warn(
                 `[arena-uploader] upload failed (${e.message}), retry in ${delay / 1000}s`
             );
@@ -333,6 +360,15 @@ async function processGame(filePath) {
     return 'done';
 }
 
+/** La game a été découpée il y a plus de REFUSED_MAX_AGE_MS. */
+function isRefusedTooLong(filePath) {
+    try {
+        return Date.now() - fs.statSync(filePath).mtimeMs > REFUSED_MAX_AGE_MS;
+    } catch (_) {
+        return false;
+    }
+}
+
 async function workerLoop() {
     if (workerRunning) return;
     workerRunning = true;
@@ -355,6 +391,10 @@ async function workerLoop() {
                 );
                 lastError = e.message;
                 QUEUE.shift();
+                if (isRefusal(e) && isRefusedTooLong(NEXT)) {
+                    console.warn('[arena-uploader] refused for too long →', NEXT);
+                    moveToFailed(NEXT);
+                }
             } finally {
                 currentFile = null;
             }

@@ -38,6 +38,11 @@ const DEFAULT_BASE_DELAY_MS = 1000;
 // considère le transfert mort. Rien à voir avec sa durée totale, qui se compte en
 // minutes pour une vidéo de salle.
 const DOWNLOAD_IDLE_TIMEOUT_MS = 60 * 1000;
+// Même principe pour les appels API et l'envoi présigné : une connexion morte
+// sans prévenir (box qui redémarre, NAT qui oublie) ne lève aucune erreur, la
+// requête attendrait pour toujours. Toute activité (octet envoyé ou reçu)
+// relance le délai, un envoi lent mais vivant n'est donc jamais coupé.
+const REQUEST_IDLE_TIMEOUT_MS = 60 * 1000;
 
 class NotAuthenticatedError extends Error {
     constructor(detail = '') {
@@ -91,6 +96,9 @@ function httpsRequest(options, bodyBuffer = null) {
             });
         });
         REQ.on('error', reject);
+        REQ.setTimeout(REQUEST_IDLE_TIMEOUT_MS, () => {
+            REQ.destroy(new Error('request stalled'));
+        });
         if (bodyBuffer) REQ.write(bodyBuffer);
         REQ.end();
     });
@@ -831,6 +839,9 @@ async function uploadFileToPresignedUrl(
                     }
                 );
                 REQ.on('error', reject);
+                REQ.setTimeout(REQUEST_IDLE_TIMEOUT_MS, () => {
+                    REQ.destroy(new Error('upload stalled'));
+                });
                 // Lecture bornée à la taille annoncée : un fichier qui grossit
                 // pendant l'envoi (le log du jour, que l'envoi lui-même alimente)
                 // dépasserait sinon le Content-Length, et la requête casserait.
