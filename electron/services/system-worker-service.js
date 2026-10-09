@@ -34,9 +34,9 @@ const {
 // mode d'exploitation, pas une fonctionnalité utilisateur.
 //
 // Le pipeline est celui du watch folder, amputé de ses trois étapes fragiles :
-//   - pas de `/identify` : la game est désignée par le serveur (le nom de l'objet
-//     S3 porte son guid), donc aucun risque d'attacher l'analyse à la mauvaise ;
-//   - pas de découpe ni d'upload : la vidéo EST une game, et elle est déjà en S3 ;
+//   - pas de `/identify` : la game est désignée par le serveur, donc aucun risque
+//     d'attacher l'analyse à la mauvaise ;
+//   - pas de découpe ni d'upload : la vidéo EST une game, et elle est déjà côté serveur ;
 //   - pas de phase 1 : la vidéo a déjà été découpée SUR la game par le PC de salle
 //     (arena-pipeline-service, marge de 1 s de part et d'autre), donc ses bornes
 //     sont le fichier lui-même. La relancer ici ne ré-estimerait que du connu, et
@@ -49,8 +49,7 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;
 // Games traitées de front — la machine est dédiée à ça. Un process Python par game
 // (sa propre VideoCapture, son propre Tesseract) : vraie parallélisation, pas de GIL.
 // Même valeur que DEEP_ANALYSIS_CONCURRENCY côté watch folder. À ne pas monter sans
-// mesurer : le serveur réserve chaque game pour une heure, et des analyses simultanées
-// qui dépasseraient ce délai se feraient re-servir, donc analyser en double.
+// mesurer : une analyse trop longue risque d'être faite en double.
 const CONCURRENCY = 3;
 // Au-delà, la vidéo n'est pas une game de salle plausible — on ne lance pas une
 // analyse de plusieurs heures sur un fichier aberrant.
@@ -251,7 +250,7 @@ async function processGame(game, systemKey) {
         );
         return true;
     } catch (e) {
-        // 404 (vidéo disparue) et 422 (clé refusée, ou analyse sans kill) sont
+        // 404 et 422 sont
         // définitifs : le serveur ne changera pas d'avis, on log et on passe.
         if (e instanceof ApiError && (e.status === 404 || e.status === 422)) {
             console.warn(`[system-worker] ${game.gameId} refusée par le serveur : ${e.body}`);
@@ -272,9 +271,8 @@ async function processGame(game, systemKey) {
  * Un tour de boucle : demande un lot de games, les traite de front, et enchaîne tant
  * que le serveur en donne. File vide → on repasse dans POLL_INTERVAL_MS.
  *
- * Le lot suivant n'est demandé qu'une fois le précédent entièrement terminé : le
- * serveur ne réserve donc jamais plus de CONCURRENCY games à la fois, et une game
- * lente ne fait pas gonfler le nombre de réservations en vol.
+ * Le lot suivant n'est demandé qu'une fois le précédent entièrement terminé : jamais
+ * plus de CONCURRENCY games en cours à la fois.
  */
 async function tick(systemKey) {
     if (running) return;

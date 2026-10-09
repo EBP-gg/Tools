@@ -17,8 +17,8 @@ const { ingestArenaGames } = require('./tools-api-client');
 // unregister — impossible d'avoir un mode salle activé et un poller à l'arrêt.
 // Quand le mode est actif : interroge l'API GraphQL publique d'EVA (api.eva.gg,
 // PAS d'auth) pour récupérer les 10 dernières parties finies sur notre arène, et
-// les POUSSE telles quelles au serveur EvaBattlePlan (`/arena/games/ingest`,
-// upsert T_Games). C'est tout ce que fait ce service.
+// les POUSSE telles quelles au serveur EvaBattlePlan (`/arena/games/ingest`).
+// C'est tout ce que fait ce service.
 //
 // EvaBattlePlan est la SOURCE DE RÉFÉRENCE des games. Ce push le rend simplement
 // réactif (les games de la salle sont connues dans les 90 s).
@@ -35,14 +35,9 @@ const POLL_INTERVAL_MS = 90 * 1000;
 const POLL_BACKOFF_MAX_MS = 15 * 60 * 1000;
 const FETCH_LIMIT = 10;
 
-// Requête COMPLÈTE : elle doit rester IDENTIQUE à celle du poller serveur EBP
-// (eva.service `ARENA_GQL_QUERY`), car ce sont ces nœuds bruts que le serveur
-// normalise. Deux champs s'y sont ajoutés et ne doivent pas être oubliés ici :
-//  - `rank` dans les stats joueur : le serveur le stocke (T_Game_Players.rank), et
-//    l'ingest REMPLACE le roster — l'omettre écraserait le rang à NULL, sans retour
-//    possible une fois la game marquée vérifiée ;
-//  - la branche `colorChaos` : le jeu de peinture a ses propres tables côté EBP, et
-//    ce poller est l'une des deux sources qui l'alimentent.
+// Requête COMPLÈTE : elle doit rester IDENTIQUE à celle utilisée côté serveur,
+// car ce sont ces nœuds bruts que le serveur normalise. Ne pas retirer `rank`
+// (stats joueur) ni la branche `colorChaos` : le serveur en a besoin.
 // ⚠️ Attention aux espaces en fin de fragment : deux champs collés ("winnerTeamColor" +
 // "teams") font rejeter la requête ENTIÈRE par EVA, games After-H comprises.
 const GQL_QUERY =
@@ -115,8 +110,7 @@ function fetchGames(terrainId) {
 /**
  * Un tour : lecture des 10 dernières games de l'arène et push au serveur, tel
  * quel. Aucun filtrage ici — ni doublon, ni tri des nœuds (colorChaos, arène
- * étrangère) : c'est au serveur de trancher (`ingestPublicArenaGames` normalise
- * et upsert, l'opération est idempotente).
+ * étrangère) : c'est au serveur de trancher (opération idempotente).
  *
  * Un échec du PUSH ne fait pas reculer la cadence EVA : le tour suivant (90 s)
  * réessaie. Un échec du FETCH remonte au planificateur, qui applique le backoff.

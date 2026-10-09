@@ -111,7 +111,7 @@ function httpsRequest(options, bodyBuffer = null) {
  * `requireAuth: false` → pas de jeton exigé (endpoints du mode salle, dont le
  * credential est la clé de salle). `authToken` → jeton de la vidéo en cours,
  * sinon repli sur le dernier jeton reçu du site. `headers` → headers
- * additionnels (ex. X-Arena-Token).
+ * additionnels (ex. la clé de salle).
  */
 async function apiRequest(
     method,
@@ -198,9 +198,8 @@ async function apiRequest(
 
 /**
  * POST /api/tools/games/identify
- * Première étape : matche les segments aux games BDD (LCS sur mapID + scores
- * ±1, sessions 4h) et retourne les rosters avec K/D pour pouvoir nourrir la
- * phase 2 d'analyse approfondie avec des pseudos full-confiance.
+ * Première étape : rapproche les segments des games connues d'EBP et retourne
+ * les rosters avec K/D pour pouvoir nourrir la phase 2 d'analyse approfondie avec des pseudos full-confiance.
  *
  * @param {object} payload { sourceFilename?, teamId, segments: [{ tempId, startSeconds, endSeconds, mode, mapName, blueScore, orangeScore, ... }] }
  * @returns {Promise<{ matches: Array<{tempId, gameID, hasVideo, orangePlayers: Array<{name, K, D}>, bluePlayers: Array<{name, K, D}>}>, unmatched: Array<string> }>}
@@ -215,11 +214,10 @@ function identifyGames(payload, authToken) {
  * POST /api/tools/games/persist-analysis
  * Seconde étape : persiste les analyses approfondies de phase 2 pour les games
  * matchées via `/identify`. Le client envoie directement les `gameID` (pas de
- * re-matching côté back). Ownership re-vérifiée par game.
+ * re-matching côté back).
  *
  * @param {object} payload { analyses: [{ gameID, payload }], teamId }
- *   `teamId` = équipe-auteur des analyses (issue du deeplink du site) — OBLIGATOIRE,
- *   le serveur refuse (403) sans lui.
+ *   `teamId` = équipe-auteur des analyses (issue du deeplink du site) — OBLIGATOIRE.
  * @returns {Promise<{ persisted: Array<string>, failed: Array<{gameID, reason}> }>}
  */
 function persistAnalysis(payload, authToken) {
@@ -229,12 +227,12 @@ function persistAnalysis(payload, authToken) {
 /**
  * POST /api/tools/arena/pre-analysis/next
  * MODE SYSTÈME : demande au serveur les prochaines vidéos de salle à pré-analyser.
- * Le worker ne choisit rien — le serveur désigne les games (celles où joue un abonné
- * Statistics Pro d'abord), présigne lui-même leur objet S3 et les réserve une heure.
+ * Le worker ne choisit rien — le serveur désigne les games et fournit pour chacune
+ * une URL de lecture.
  *
  * Auth par clé de service seule (X-System-Token), sans jeton utilisateur : le worker
- * tourne en continu et n'agit pour le compte de personne. Refus = 422, jamais 401/403,
- * pour ne pas être confondu avec une perte de session côté client.
+ * tourne en continu et n'agit pour le compte de personne. Un refus n'est pas une perte
+ * de session côté client.
  *
  * @param {number} limit 1..5
  * @param {string} systemKey
@@ -252,12 +250,9 @@ function fetchPreAnalysisBatch(limit, systemKey) {
 
 /**
  * POST /api/tools/arena/pre-analysis
- * MODE SYSTÈME : dépose le payload calculé pour une game de salle. Le serveur l'écrit
- * sous l'équipe système et lève la réservation.
+ * MODE SYSTÈME : dépose le payload calculé pour une game de salle.
  *
- * 404 = la game n'a plus de vidéo de salle ; 422 = clé refusée OU analyse sans aucun
- * kill (le champ `error` distingue les deux). Ces deux cas sont définitifs : inutile
- * de réessayer.
+ * 404 et 422 sont des refus définitifs : inutile de réessayer.
  *
  * @param {{gameId: string, payload: object}} payload
  * @param {string} systemKey
@@ -275,7 +270,7 @@ function submitPreAnalysis(payload, systemKey) {
  * POST /api/tools/games/:gameID/upload-url
  * @param {string|number} gameID
  * @param {string|undefined} teamId  équipe-auteur de la vidéo (issue du deeplink du
- *   site) — OBLIGATOIRE, le serveur refuse (403) sans lui.
+ *   site) — OBLIGATOIRE.
  * @returns {Promise<{ url, key, expiresAt }>}
  */
 function requestUploadUrl(gameID, teamId, authToken) {
@@ -290,7 +285,7 @@ function requestUploadUrl(gameID, teamId, authToken) {
 /**
  * POST /api/tools/games/:gameID/confirm-upload
  * @param {object} payload { guid, teamId } — même `teamId` que l'upload-url, pour
- *   que la vidéo atterrisse sur la même ligne d'analyse (game_id, author_team_id).
+ *   que la vidéo atterrisse sur la même analyse.
  */
 function confirmUpload(gameID, payload, authToken) {
     return apiRequest(
@@ -305,13 +300,11 @@ function confirmUpload(gameID, payload, authToken) {
  * POST /api/tools/arena/register
  * Mode salle : enregistre cette machine comme PC de streaming d'une arène.
  * Pas d'auth user (Tools n'ouvre plus de session) : le credential est la clé de
- * salle (T_EVA_Locations.tools_token, révocable en base, IP optionnellement
- * restreinte), validée côté serveur.
- * La clé elle-même sert de credential pour les futurs endpoints salle (header
- * `X-Arena-Token`). `arenaId` = ordinal de l'arène dans la salle (1 ou 2) ;
+ * salle, validée côté serveur.
+ * La clé elle-même sert de credential pour les endpoints salle.
+ * `arenaId` = ordinal de l'arène dans la salle (1 ou 2) ;
  * le serveur renvoie l'id du terrain réel pour le futur matching des games.
- * Erreurs : 404 salle/arène inconnue, 422 clé refusée (clé invalide, mode
- * désactivé ou mauvaise IP). Contrat : wiki/arena_mode_api.md.
+ * Erreurs : 404 salle/arène inconnue, 422 clé refusée.
  *
  * @param {{roomId:number, arenaId:number, key:string}} payload
  * @returns {Promise<{ roomName: string, terrainId: string, terrainName: string }>}
@@ -358,12 +351,10 @@ function getArenaLocations() {
 /**
  * POST /api/tools/arena/heartbeat
  * Battement de présence du mode salle (toutes les 5 min, ou à chaque
- * changement d'état local) : la page admin du site affiche l'arène "en ligne"
- * tant que le dernier battement a moins de 15 min, et l'état remonté (version,
- * captation, spool/, games/) sert au diagnostic à distance. Authentifié par la
- * clé de salle seule (header X-Arena-Token, pas de cookie : doit fonctionner
- * même session user expirée). Pas de retry — le battement suivant rattrape un
- * échec ponctuel.
+ * changement d'état local) : l'état remonté (version, captation, spool/, games/)
+ * sert au diagnostic à distance. Authentifié par la clé de salle seule (pas de
+ * cookie : doit fonctionner même session user expirée). Pas de retry — le
+ * battement suivant rattrape un échec ponctuel.
  *
  * @param {{roomId:number, arenaId:number, version:string, recording:boolean,
  *   pendingGames:string[], spool:string[]}} payload
@@ -416,8 +407,8 @@ function reportArenaFileResult(payload, arenaToken) {
 
 /**
  * POST /api/tools/arena/games/resolve
- * Demande à EBP l'identité EVA d'une game découpée localement : match sur
- * (arène du token, fin de game ±3 min) avec la map en garde-fou. EBP est la
+ * Demande à EBP l'identité EVA d'une game découpée localement, à partir de son
+ * arène, de son heure de fin et de sa map. EBP est la
  * source de référence des games (poller serveur, push du poller salle, imports
  * d'équipe), donc la question ne se pose qu'à lui.
  *
@@ -439,15 +430,9 @@ function resolveArenaGameId(payload, arenaToken) {
 
 /**
  * POST /api/tools/arena/color-chaos/resolve
- * Pendant du resolve After-H pour une partie Color Chaos : match sur (arène du
- * token, DÉBUT de partie ±2 min). On compare les débuts parce que c'est ce que
- * les deux côtés portent nativement — `startedAtEpoch` borne déjà le fichier
- * découpé, et EBP stocke le début de partie.
- *
- * Sans map en garde-fou (Tools ne lit pas celle d'une partie Color Chaos), la
- * fenêtre est la seule protection : elle est plus serrée que l'écart minimal
- * entre deux parties d'une même arène, et le serveur refuse dès qu'il a
- * plusieurs candidats.
+ * Pendant du resolve After-H pour une partie Color Chaos, à partir de l'arène et
+ * de l'heure de DÉBUT de partie (`startedAtEpoch`, qui borne déjà le fichier
+ * découpé). Pas de map : Tools ne lit pas celle d'une partie Color Chaos.
  *
  * `{gameId: null, reason}` est une réponse NORMALE, pas un échec : la partie
  * peut n'être pas encore remontée en base. Seule une exception veut dire
@@ -467,13 +452,13 @@ function resolveColorChaosGameId(payload, arenaToken) {
 
 /**
  * POST /api/tools/arena/games/upload-url
- * URL présignée PUT vers `statistics/replays/{guid}.mp4` : l'emplacement ET le
- * nommage définitifs d'un replay, identiques à ceux d'une analyse locale. On
+ * URL présignée PUT vers l'emplacement définitif d'un replay, identique à celui
+ * d'une analyse locale. On
  * envoie le `gameId` EVA (celui que `resolveArenaGameId` a donné) et c'est le
- * SERVEUR qui en déduit le guid — Tools ne nomme jamais l'objet. Il n'y a rien
+ * SERVEUR qui en déduit l'emplacement — Tools ne nomme jamais l'objet. Il n'y a rien
  * à déposer ensuite : l'existence de l'objet est la trace de l'upload.
  *
- * Auth par clé de salle seule (X-Arena-Token). Pas de retry interne :
+ * Auth par clé de salle seule. Pas de retry interne :
  * l'uploader gère sa propre boucle persistante en re-demandant une URL fraîche
  * à chaque tentative — la clé étant déterministe, un retry réécrit le même objet.
  *
@@ -498,7 +483,7 @@ function requestArenaUploadUrl(payload, arenaToken) {
  * fournir le jeu et l'epoch de DÉBUT de game, celui qui borne déjà le fichier
  * découpé. Clé déterministe → un retry réécrit le même objet.
  *
- * Auth par clé de salle seule (X-Arena-Token).
+ * Auth par clé de salle seule.
  *
  * @param {{roomId:number, arenaId:number, gameType:string, startedAtEpoch:number}} payload
  * @param {string} arenaToken
@@ -516,8 +501,7 @@ function requestOtherGameUploadUrl(payload, arenaToken) {
  * POST /api/tools/arena/other/confirm-upload
  * Le serveur vérifie l'objet en S3 puis l'indexe, ce qui le rend visible dans
  * l'Espace Arena. Contrairement à l'After-H, cette confirmation n'est PAS
- * best-effort : aucune game en base ne permettrait de rattraper l'oubli, et
- * rien ne réconcilie ce préfixe — un replay non confirmé resterait invisible.
+ * best-effort : un replay non confirmé resterait invisible.
  * L'appelant la rejoue donc avec l'upload.
  *
  * @param {{roomId:number, arenaId:number, gameType:string, startedAtEpoch:number}} payload
@@ -535,10 +519,9 @@ function confirmOtherGameUpload(payload, arenaToken) {
 /**
  * POST /api/tools/arena/games/confirm-upload
  * Confirme au serveur que le PUT du replay a réussi : le serveur VÉRIFIE l'objet
- * en S3 puis indexe la vidéo (T_Terrain_Videos), ce qui rend requêtable « quelles
- * games ont une vidéo de salle » sans interroger S3. À appeler APRÈS un PUT réussi,
- * avec le même `gameId` EVA que `requestArenaUploadUrl`. Best-effort : un échec
- * n'invalide pas l'upload (la réconciliation serveur rattrape).
+ * en S3 puis indexe la vidéo, ce qui la rend visible côté site. À appeler
+ * APRÈS un PUT réussi, avec le même `gameId` EVA que `requestArenaUploadUrl`.
+ * Best-effort : un échec n'invalide pas l'upload, il est rattrapé côté serveur.
  *
  * @param {{roomId:number, arenaId:number, gameId:string}} payload
  * @param {string} arenaToken
@@ -555,9 +538,9 @@ function confirmArenaUpload(payload, arenaToken) {
 /**
  * POST /api/tools/arena/games/ingest
  * Mode salle : pousse vers EBP les nœuds bruts `listLastGamesAtLocation` des
- * nouvelles games vues par le poller, pour qu'EBP les upsert dans sa BDD
- * (T_Games) sans attendre son propre poll ni un import d'équipe. Auth clé de
- * salle (X-Arena-Token). Best-effort : le poller serveur d'EBP reste le filet.
+ * nouvelles games vues par le poller, pour qu'EBP les connaisse sans attendre
+ * son propre poll ni un import d'équipe. Auth clé de salle. Best-effort : le
+ * poller serveur d'EBP reste le filet.
  *
  * @param {{roomId:number, arenaId:number, games:object[]}} payload
  * @param {string} arenaToken
@@ -645,8 +628,7 @@ async function reportAnalysisIssue(payload, authToken) {
  * POST /api/tools/telemetry
  * Télémétrie technique de Tools (version installée, issue des mises à jour).
  * Pas d'auth : Tools n'ouvre pas de session, et l'événement doit remonter même
- * pour un utilisateur qui n'a jamais ouvert de deeplink. Le serveur limite donc
- * le débit par IP.
+ * pour un utilisateur qui n'a jamais ouvert de deeplink.
  *
  * Tolérant aux échecs, comme `pushWatcherStatus` : la télémétrie ne doit
  * pouvoir casser aucun flux.
@@ -656,10 +638,8 @@ async function reportAnalysisIssue(payload, authToken) {
  */
 async function sendTelemetry(payload) {
     try {
-        // Le jeton du site est joint QUAND il existe, sans être exigé : il fait
-        // marquer l'événement « de confiance » côté serveur, seul sous-ensemble
-        // non falsifiable d'un endpoint ouvert. Un poste sans jeton doit
-        // continuer de remonter ses événements, simplement non authentifiés.
+        // Le jeton du site est joint QUAND il existe, sans être exigé : un poste
+        // sans jeton doit continuer de remonter ses événements.
         const TOKEN = resolveAuthToken();
         await apiRequest('POST', '/telemetry', payload, {
             retries: 1,

@@ -5,8 +5,7 @@
 # (electron/services/system-worker-service.js) : sans elle, start() est un no-op.
 # Elle est lue dans .ebp-system-key (gitignoré) plutôt qu'écrite ici.
 #
-# ATTENTION : ce mode écrit RÉELLEMENT en prod — les analyses produites sont
-# persistées sous l'équipe système et deviennent visibles des joueurs.
+# ATTENTION : ce mode écrit RÉELLEMENT en prod.
 set -e
 cd "$(dirname "$0")/.."
 # Un terminal intégré VS Code exporte ELECTRON_RUN_AS_NODE=1, ce qui fait tourner

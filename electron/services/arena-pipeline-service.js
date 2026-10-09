@@ -72,20 +72,18 @@ const IMPLAUSIBLE_GAME_S = 20 * 60;
 const ZOMBIES_IMPLAUSIBLE_GAME_S = 45 * 60;
 // Modes du jeu After-H. Ils ont une game chez EVA, donc une identité à résoudre
 // et un replay qui vit avec les autres : nom identifiable à 6 champs, puis
-// `statistics/replays/{guid}`. Le jeu d'arme en fait partie — l'analyzer le
+// l'upload sous l'identité de la game. Le jeu d'arme en fait partie — l'analyzer le
 // distingue d'une Domination au libellé de l'écran final, mais pour EVA c'est
 // une game comme une autre, avec sa map, ses scores et son id.
 //
 // Le Zombies (MoonOfTheDead, mode EVA 7) les a rejoints le 06/09/2026, quand ce
-// mode est entré dans T_Games. Il n'a ni map ni scores à lire, mais ça ne le
-// disqualifie pas : le nom porte alors `unknown` et `0-0`, et le resolve traite
-// déjà `unknown` comme « OCR de map en échec » — il désactive le garde-fou map
-// au lieu de refuser. La fin de game suffit à l'identifier.
+// mode est devenu importable côté EBP. Il n'a ni map ni scores à lire, mais ça ne le
+// disqualifie pas : le nom porte alors `unknown` et `0-0`, valeurs que le resolve
+// accepte.
 // Le Chacun pour soi (FreeForAll, mode EVA 2) les a rejoints le 07/09/2026 :
 // il a bien une game chez EVA, mais sa fin est un podium par joueur, pas une
 // score frame — d'où ni scores (`0-0`) ni map (`unknown`, l'analyseur ne lit
-// celle-ci que sur le HUD d'équipes qu'il n'a pas), exactement le cas que le
-// resolve sait déjà traiter pour le Zombies.
+// celle-ci que sur le HUD d'équipes qu'il n'a pas), exactement le cas du Zombies.
 const AFTER_H_LIKE_TYPES = new Set([
     'after-h',
     'gun-game',
@@ -375,8 +373,7 @@ async function processRun(run) {
         // Le jeu d'arme et le Zombies, eux, ONT une game côté EVA : ils prennent
         // le nom identifiable, sans quoi leur replay finirait dans une zone à
         // part alors qu'EBP connaît leur game et son guid. Le Zombies n'a ni map
-        // ni scores à y mettre — `unknown` et `0-0` — ce que le resolve sait
-        // traiter (il désactive alors le garde-fou map).
+        // ni scores à y mettre — `unknown` et `0-0` — ce que le resolve accepte.
         const GAME_TYPE = G.gameType ?? 'after-h';
         // EVA interdit la captation des games de ligue (Pro League, Challenger…) :
         // seul le thème HUD Classic est enregistré. Thème illisible (null) = on

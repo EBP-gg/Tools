@@ -27,10 +27,10 @@ const { version: TOOLS_VERSION } = require('../../package.json');
 //#endregion
 
 // Mode salle : cette machine est le PC de streaming d'une arène EVA. L'état
-// vit dans les settings permanents. Contrat backend : wiki/arena_mode_api.md.
+// vit dans les settings permanents.
 const SETTINGS_KEY = 'arenaMode';
-// Filet de sécurité, plus un battement de présence : c'est la connexion au
-// namespace /arena qui dit à l'admin qu'une salle est en ligne, et tout
+// Filet de sécurité, plus un battement de présence : la connexion socket suffit
+// à signaler la salle en ligne, et tout
 // changement d'état déclenche déjà un battement immédiat. Le périodique ne sert
 // donc plus qu'à deux choses, dont aucune n'exige 5 minutes : prouver que
 // l'APPLICATION vit — un socket ouvert ne prouve que la connexion, l'analyseur
@@ -483,7 +483,7 @@ function getState() {
 }
 
 /**
- * Token d'arène pour les futurs endpoints salle (header `X-Arena-Token`).
+ * Token d'arène pour les endpoints salle.
  * @returns {string|null}
  */
 function getArenaToken() {
@@ -493,11 +493,11 @@ function getArenaToken() {
 
 /**
  * Valide la clé de salle auprès du backend et la persiste : c'est elle qui
- * servira de credential (header `X-Arena-Token`) sur les endpoints salle.
+ * servira de credential sur les endpoints salle.
  * @param {{roomId:number, arenaId:number, key:string}} payload
  * @returns {Promise<{registered: true, roomId: number, arenaId: number, roomName: string}>}
  * @throws NotAuthenticatedError / ApiError (404 salle/arène inconnue, 422 clé
- *   refusée — clé invalide, mode désactivé ou mauvaise IP) — remontées telles
+ *   refusée) — remontées telles
  *   quelles au caller (server.js) qui les transforme en erreur i18n.
  */
 async function register({ roomId, arenaId, key }) {

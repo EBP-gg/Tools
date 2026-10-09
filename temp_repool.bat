@@ -11,7 +11,7 @@ REM <video>  chemin complet OU simple nom de fichier s'il est deja dans le spool
 REM <ancre>  heure d'horloge de la PREMIERE IMAGE de la video (pas celle de la
 REM          1re game). Accepte "HH:MM:SS" et "HH-MM-SS". Omise, elle est lue
 REM          dans le nom du fichier (nommage OBS "AAAA-MM-JJ HH-MM-SS.mkv").
-REM          Elle doit etre juste a moins de 3 min, sinon
+REM          Elle doit etre precise, sinon
 REM          /arena/games/resolve ne retrouvera pas les games.
 REM
 REM Pourquoi pas -strftime : il nomme les segments avec l'heure COURANTE, pas

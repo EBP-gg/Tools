@@ -76,7 +76,7 @@ export class ArenaModeComponent implements OnInit, OnDestroy {
   protected state?: ArenaModeState;
 
   protected roomId?: number;
-  /** Id T_EVA_Terrains de l'arène. */
+  /** Id EVA du terrain de l'arène. */
   protected arenaId?: number;
   protected key?: string;
   protected registering: boolean = false;

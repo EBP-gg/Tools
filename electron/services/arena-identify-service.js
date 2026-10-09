@@ -31,8 +31,8 @@ const { resolveArenaGameId } = require('./tools-api-client');
 // — un admin peut donc la récupérer à la main —
 // mais pas indéfiniment : passé PENDING_MAX_AGE_S après sa fin, elle est
 // supprimée. Sans ça, les games d'intersalle (jamais rattachées à ce terrain)
-// s'accumulent sur le disque, et chaque tour les renvoie toutes au resolve, dont
-// le quota par arène finirait par bloquer l'identification des games normales.
+// s'accumulent sur le disque, et chaque tour les renvoie toutes au resolve, au
+// détriment de l'identification des games normales.
 //
 // Comme le poller, il tourne en permanence et vérifie lui-même à chaque tour
 // que le mode salle est actif : impossible d'avoir un mode salle activé et une
@@ -45,7 +45,7 @@ const PENDING_MAX_AGE_S = 7 * 24 * 60 * 60;
 // Une game récente est re-soumise à chaque tour : c'est le cas normal, EBP la
 // connaît dans la minute. Au-delà, elle n'est re-soumise que toutes les
 // OLD_RETRY_MS — sinon chaque game en souffrance (intersalle surtout) coûte un
-// appel par minute, et une trentaine suffit à faire tomber le resolve en 429.
+// appel par minute, ce qui sollicite inutilement le resolve.
 const RECENT_MAX_AGE_S = 60 * 60;
 const OLD_RETRY_MS = 30 * 60 * 1000;
 // Nom provisoire écrit par le pipeline : 6 champs, pas de gameId.

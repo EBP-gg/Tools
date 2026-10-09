@@ -27,17 +27,14 @@ const {
 // et reste invisible ici. Il n'y a donc AUCUNE gate à réévaluer.
 //
 // Un seul appel réseau par game : on demande une URL présignée pour ce gameId et
-// on pousse le fichier. Le serveur écrit à l'emplacement DÉFINITIF des replays,
-// `statistics/replays/{T_Games.guid}.mp4` — même nommage qu'une analyse locale.
-// Rien à déposer ensuite : l'existence de l'objet EST la trace de l'upload, et
-// le hook d'import s'en sert pour attacher la vidéo à l'équipe. Fichier +
-// fichier local supprimé une fois l'upload confirmé.
+// on pousse le fichier. Le serveur choisit l'emplacement DÉFINITIF du replay,
+// le même que pour une analyse locale.
+// Rien à déposer ensuite. Le fichier local est supprimé une fois l'upload confirmé.
 //
 // Les games d'un autre jeu qu'After-H (Color Chaos) suivent le même chemin, mais
-// sans identification : elles n'ont pas de ligne en base côté EBP, il n'y a pas
-// de gameId à leur trouver. Le pipeline les nomme `cc_…` et elles partent sur la
-// route « autre jeu », dans leur propre zone S3 — le jeu voyage dans le payload,
-// c'est lui qui décide de la zone.
+// sans identification : il n'y a pas de gameId à leur trouver. Le pipeline les
+// nomme `cc_…` et elles partent sur la route « autre jeu », le jeu voyageant
+// dans le payload.
 //
 // V1 : plus d'analyse phase 2 (killfeed) sur le PC de salle — les joueurs sont
 // déjà connus côté serveur. Le killfeed pourra être rebranché plus tard.
@@ -206,8 +203,8 @@ async function withPersistentRetry(attempt) {
 
 /**
  * Upload S3 avec retry persistant. On envoie le `gameId` EVA : c'est le serveur
- * qui en déduit la clé (`statistics/replays/{T_Games.guid}.mp4`), Tools ne nomme
- * jamais l'objet. Clé déterministe → un retry réécrit le même objet.
+ * qui en déduit l'emplacement, Tools ne nomme jamais l'objet. Clé déterministe
+ * → un retry réécrit le même objet.
  */
 function uploadWithPersistentRetry(filePath, gameId, ids, token) {
     return withPersistentRetry(async () => {
@@ -219,15 +216,15 @@ function uploadWithPersistentRetry(filePath, gameId, ids, token) {
             contentType: 'video/mp4'
         });
         // Confirme l'upload : le serveur vérifie l'objet en S3 puis indexe la
-        // vidéo (T_Terrain_Videos). Best-effort — l'objet est déjà en S3, la
-        // réconciliation serveur rattrape un échec de confirmation.
+        // vidéo. Best-effort — l'objet est déjà envoyé, un
+        // échec de confirmation est rattrapé côté serveur.
         try {
             await confirmArenaUpload(
                 { roomId: ids.roomId, arenaId: ids.arenaId, gameId },
                 token
             );
         } catch (e) {
-            console.warn(`[arena-uploader] confirm-upload failed (${e.message}), serveur réconciliera`);
+            console.warn(`[arena-uploader] confirm-upload failed (${e.message}), rattrapé par le serveur`);
         }
         return UPLOAD.guid;
     });
@@ -238,8 +235,7 @@ function uploadWithPersistentRetry(filePath, gameId, ids, token) {
  * et de l'epoch de début de game.
  *
  * La confirmation est DANS la tentative, pas en best-effort comme pour
- * l'After-H : elle est ce qui rend le replay visible dans l'Espace Arena (rien
- * ne réconcilie ce préfixe, il n'y a pas de game en base pour rattraper). Si
+ * l'After-H : elle est ce qui rend le replay visible dans l'Espace Arena. Si
  * elle échoue, on rejoue tout — le PUT réécrit le même objet, la clé étant
  * déterministe.
  *
@@ -248,8 +244,7 @@ function uploadWithPersistentRetry(filePath, gameId, ids, token) {
  * qu'une vidéo nue là où la map, les scores des camps et les joueurs sont en
  * base. La résolution se fait APRÈS l'envoi, juste avant la confirmation :
  * c'est le moment le plus tardif, donc celui qui laisse le plus de temps à la
- * partie pour remonter (le poller de salle pousse toutes les 90 s, le poller
- * serveur ne repasse que toutes les ~25 min).
+ * partie pour remonter (le poller de salle pousse toutes les 90 s).
  */
 function uploadOtherGameWithPersistentRetry(filePath, gameType, startedAtEpoch, ids, token) {
     const PAYLOAD = {

@@ -560,10 +560,8 @@ async function processVideo(videoPath, deps) {
         ANALYSES_TO_PERSIST.push({ gameID: M.gameID, payload: A.payload });
     }
     // Games dont l'analyse a réellement été persistée : seules celles-là passent
-    // en phase encodage/upload. Une game refusée par le serveur (ex. garde
-    // "No kills" = matching /identify suspect) ou sans payload ne doit PAS voir
-    // sa vidéo uploadée — le serveur refuse d'ailleurs l'upload-url (412) sans
-    // analyse persistée.
+    // en phase encodage/upload. Une game refusée par le serveur ou sans payload
+    // ne doit PAS voir sa vidéo uploadée.
     let PERSISTED_IDS = new Set();
     if (ANALYSES_TO_PERSIST.length > 0) {
         const PERSIST_RES = await persistAnalysis(

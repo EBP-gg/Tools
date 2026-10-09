@@ -43,8 +43,7 @@ const ARENA_URL = (USE_PROD ? 'https://evabattleplan.com' : 'http://localhost:30
 let arenaSocket = null;
 // Relance du canal après un refus du serveur (cf. `connect_error`).
 let arenaRetryTimer = null;
-// Une minute : la vérification côté serveur ne coûte qu'une requête en base, et
-// c'est le délai que l'admin attend avant de revoir la salle en ligne.
+// Une minute : c'est le délai que l'admin attend avant de revoir la salle en ligne.
 const ARENA_RETRY_MS = 60 * 1000;
 
 /**
@@ -75,8 +74,8 @@ function connectArena(state, handlers) {
         console.log('[SOCKET] arena namespace connected');
         if (handlers.onConnect) handlers.onConnect();
     });
-    // Clé révoquée, IP changée, abonnement inactif : le serveur refuse le
-    // handshake, et socket.io-client tient ce refus pour définitif — la socket
+    // Si le serveur refuse le handshake, socket.io-client tient ce refus pour
+    // définitif — la socket
     // n'est plus `active`, la reconnexion automatique ne la relance PAS (elle ne
     // couvre que les coupures réseau). On la relance donc nous-mêmes : une clé
     // régénérée ou un abonnement repayé doit reprendre sans redémarrer Tools.
