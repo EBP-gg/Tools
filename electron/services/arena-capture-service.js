@@ -155,6 +155,9 @@ let webcamRetryDelayMs = WEBCAM_RETRY_BASE_MS;
 // jeton invalide une attente en cours quand la captation est arrêtée ou
 // relancée.
 let waitingGame = false;
+// Début de l'attente : le serveur y compare les games EVA de l'arène pour
+// signaler celles jouées sans que le jeu soit détecté ici.
+let waitingSince = 0;
 let gameWaitTimer = null;
 let gameWaitToken = 0;
 // Exécutable du jeu filmé par la scène : ffmpeg ne cible que lui, et un
@@ -766,6 +769,7 @@ function stopCapture() {
 function waitForGame() {
     if (waitingGame) return;
     waitingGame = true;
+    waitingSince = Date.now();
     const TOKEN = ++gameWaitToken;
     let logged = false;
     const CHECK = () => {
@@ -1038,6 +1042,7 @@ function getStatus() {
         // Armée, en attente de la fenêtre du jeu : rien n'est écrit, mais la
         // captation n'est pas arrêtée pour autant.
         waitingGame,
+        waitingSince: waitingGame ? waitingSince : null,
         // Le renderer n'envoie du PCM que si le tube attend réellement du son.
         audio: arenaAudioService.getStatus(),
         videoStarted,

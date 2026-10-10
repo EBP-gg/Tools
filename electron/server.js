@@ -171,6 +171,7 @@ arenaModeService.setStatusProvider(() => {
         health: {
             capture: {
                 waitingGame: CAPTURE.waitingGame,
+                waitingSince: CAPTURE.waitingSince,
                 suspended: CAPTURE.suspended,
                 diskLow: CAPTURE.diskLow,
                 encoder: CAPTURE.encoder,
