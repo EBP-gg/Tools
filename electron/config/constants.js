@@ -122,7 +122,7 @@ const OS_PLATFORM = os.platform();
 // un DOSSIER (il y cherche RELEASES lui-même), Squirrel.Mac lit le manifeste
 // JSON directement. Ce dernier est de plus propre à l'ARCHITECTURE — servir une
 // app Apple Silicon à un Mac Intel produirait un binaire qui ne démarre pas.
-const UPDATE_FEED_BASE = `https://storage.ebp.gg/public/tools/updates/${UPDATE_REPOSITORY}`;
+const UPDATE_FEED_BASE = `https://ebp-tools-releases.nbg1.your-objectstorage.com/tools/updates/${UPDATE_REPOSITORY}`;
 const UPDATE_FEED_URL =
     OS_PLATFORM === 'darwin'
         ? `${UPDATE_FEED_BASE}/darwin-${process.arch}/RELEASES.json`

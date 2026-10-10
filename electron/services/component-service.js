@@ -37,7 +37,7 @@ const {
  */
 const COMPONENTS_URL =
     process.env.TOOLS_COMPONENTS_URL ||
-    'https://storage.ebp.gg/public/tools/components';
+    'https://ebp-tools-releases.nbg1.your-objectstorage.com/tools/components';
 
 // Mode salle : le PC démarre sans personne devant, parfois avant que le réseau
 // soit disponible. On réessaie donc en tâche de fond plutôt que de laisser la

@@ -16,14 +16,16 @@ env:
     # Flux Squirrel.Windows auto-hébergé. Publié dès maintenant, mais AUCUN
     # client ne le lit encore : on veut d'abord constater que les paquets delta
     # sont produits, avant d'y brancher l'updater.
-    S3_ENDPOINT: https://storage.ebp.gg
-    S3_BUCKET: public
+    # Bucket Hetzner dédié aux releases : plus rien sur le disque du serveur de
+    # prod. storage.ebp.gg/public/tools/* y redirige (302) pour les vieux clients.
+    S3_ENDPOINT: https://nbg1.your-objectstorage.com
+    S3_BUCKET: ebp-tools-releases
     # Un flux PAR DÉPÔT : sans ça les versions du banc d'essai et celles de la
     # production partageraient le même RELEASES, et un client de prod se verrait
     # proposer une version de test. Le client dérive la même URL de la même
     # variable (cf. constants.js), donc les deux ne peuvent pas diverger.
     FEED_PREFIX: tools/updates/${{ github.repository }}/win32
-    AWS_DEFAULT_REGION: us-east-1
+    AWS_DEFAULT_REGION: nbg1
     # Les clés S3 écrivent le flux de mise à jour que tous les clients installés
     # interrogent. Elles ne sont donc PAS déclarées ici : au niveau du workflow,
     # elles seraient dans l'environnement de `npm install` et de chaque étape qui
@@ -73,7 +75,7 @@ jobs:
         env:
             # Un flux par ARCHITECTURE : sans ça un Mac Intel se verrait
             # proposer une app Apple Silicon, qui ne démarrerait pas.
-            SQUIRREL_MAC_MANIFEST_BASE_URL: https://storage.ebp.gg/public/tools/updates/${{ github.repository }}/darwin-arm64
+            SQUIRREL_MAC_MANIFEST_BASE_URL: https://ebp-tools-releases.nbg1.your-objectstorage.com/tools/updates/${{ github.repository }}/darwin-arm64
             APPLE_ID: ${{ secrets.APPLE_ID }}
             APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
             APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -145,7 +147,7 @@ jobs:
         env:
             # Un flux par ARCHITECTURE : sans ça un Mac Intel se verrait
             # proposer une app Apple Silicon, qui ne démarrerait pas.
-            SQUIRREL_MAC_MANIFEST_BASE_URL: https://storage.ebp.gg/public/tools/updates/${{ github.repository }}/darwin-x64
+            SQUIRREL_MAC_MANIFEST_BASE_URL: https://ebp-tools-releases.nbg1.your-objectstorage.com/tools/updates/${{ github.repository }}/darwin-x64
             APPLE_ID: ${{ secrets.APPLE_ID }}
             APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
             APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

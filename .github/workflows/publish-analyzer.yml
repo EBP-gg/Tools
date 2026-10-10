@@ -40,11 +40,10 @@ on:
                 default: true
 
 env:
-    S3_ENDPOINT: https://storage.ebp.gg
-    S3_BUCKET: public
+    S3_ENDPOINT: https://nbg1.your-objectstorage.com
+    S3_BUCKET: ebp-tools-releases
     S3_PREFIX: tools/components/analyzer
-    # MinIO ignore la région, mais l'AWS CLI refuse de démarrer sans.
-    AWS_DEFAULT_REGION: us-east-1
+    AWS_DEFAULT_REGION: nbg1
     # Clés S3 volontairement absentes d'ici : au niveau du workflow elles
     # seraient lisibles par `pip install`, `brew install` et le binaire fraîchement
     # construit — soit autant de code tiers. Elles sont posées sur les seules
