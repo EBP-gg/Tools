@@ -451,53 +451,6 @@ function resolveColorChaosGameId(payload, arenaToken) {
 }
 
 /**
- * POST /api/tools/arena/games/upload-url
- * URL présignée PUT vers l'emplacement définitif d'un replay, identique à celui
- * d'une analyse locale. On
- * envoie le `gameId` EVA (celui que `resolveArenaGameId` a donné) et c'est le
- * SERVEUR qui en déduit l'emplacement — Tools ne nomme jamais l'objet. Il n'y a rien
- * à déposer ensuite : l'existence de l'objet est la trace de l'upload.
- *
- * Auth par clé de salle seule. Pas de retry interne :
- * l'uploader gère sa propre boucle persistante en re-demandant une URL fraîche
- * à chaque tentative — la clé étant déterministe, un retry réécrit le même objet.
- *
- * @param {{roomId:number, arenaId:number, gameId:string}} payload
- * @param {string} arenaToken
- * @returns {Promise<{url:string, key:string, guid:string, expiresAt:number}>}
- */
-function requestArenaUploadUrl(payload, arenaToken) {
-    return apiRequest('POST', '/arena/games/upload-url', payload, {
-        retries: 1,
-        requireAuth: false,
-        headers: { 'X-Arena-Token': arenaToken }
-    });
-}
-
-/**
- * POST /api/tools/arena/other/upload-url
- * URL présignée PUT pour un replay d'un jeu AUTRE qu'After-H (Color Chaos,
- * Zombies, …). Aucun de ces jeux n'a de game en base côté EBP : pas de gameId à
- * envoyer, donc une route distincte de `/arena/games/upload-url`.
- * Comme partout, c'est le SERVEUR qui compose la clé — Tools ne fait que
- * fournir le jeu et l'epoch de DÉBUT de game, celui qui borne déjà le fichier
- * découpé. Clé déterministe → un retry réécrit le même objet.
- *
- * Auth par clé de salle seule.
- *
- * @param {{roomId:number, arenaId:number, gameType:string, startedAtEpoch:number}} payload
- * @param {string} arenaToken
- * @returns {Promise<{url:string, key:string, expiresAt:number}>}
- */
-function requestOtherGameUploadUrl(payload, arenaToken) {
-    return apiRequest('POST', '/arena/other/upload-url', payload, {
-        retries: 1,
-        requireAuth: false,
-        headers: { 'X-Arena-Token': arenaToken }
-    });
-}
-
-/**
  * POST /api/tools/arena/other/confirm-upload
  * Le serveur vérifie l'objet en S3 puis l'indexe, ce qui le rend visible dans
  * l'Espace Arena. Contrairement à l'After-H, cette confirmation n'est PAS
@@ -520,7 +473,7 @@ function confirmOtherGameUpload(payload, arenaToken) {
  * POST /api/tools/arena/games/confirm-upload
  * Confirme au serveur que le PUT du replay a réussi : le serveur VÉRIFIE l'objet
  * en S3 puis indexe la vidéo, ce qui la rend visible côté site. À appeler
- * APRÈS un PUT réussi, avec le même `gameId` EVA que `requestArenaUploadUrl`.
+ * APRÈS un envoi réussi, avec le même `gameId` EVA que `startArenaMultipartUpload`.
  * Best-effort : un échec n'invalide pas l'upload, il est rattrapé côté serveur.
  *
  * @param {{roomId:number, arenaId:number, gameId:string}} payload
@@ -529,6 +482,62 @@ function confirmOtherGameUpload(payload, arenaToken) {
  */
 function confirmArenaUpload(payload, arenaToken) {
     return apiRequest('POST', '/arena/games/confirm-upload', payload, {
+        retries: 1,
+        requireAuth: false,
+        headers: { 'X-Arena-Token': arenaToken }
+    });
+}
+
+/**
+ * POST /api/tools/arena/uploads/start
+ * Ouvre un envoi PAR MORCEAUX (multipart S3) d'un replay de salle, tous jeux
+ * confondus. La cible est `gameId` EVA pour l'After-H, `gameType` +
+ * `startedAtEpoch` pour un autre jeu. Le serveur compose la clé et décide du
+ * découpage.
+ *
+ * Pas de retry interne, comme les autres appels de l'uploader : sa boucle
+ * persistante s'en charge.
+ *
+ * @param {{roomId:number, arenaId:number, size:number, gameId?:string, gameType?:string, startedAtEpoch?:number}} payload
+ * @param {string} arenaToken
+ * @returns {Promise<{uploadId:string, partSize:number, partCount:number}>}
+ */
+function startArenaMultipartUpload(payload, arenaToken) {
+    return apiRequest('POST', '/arena/uploads/start', payload, {
+        retries: 1,
+        requireAuth: false,
+        headers: { 'X-Arena-Token': arenaToken }
+    });
+}
+
+/**
+ * POST /api/tools/arena/uploads/parts
+ * URLs présignées PUT de morceaux d'un envoi ouvert (100 numéros max par appel).
+ *
+ * @param {{roomId:number, arenaId:number, uploadId:string, partNumbers:number[]}} payload cible incluse
+ * @param {string} arenaToken
+ * @returns {Promise<{urls:Array<{partNumber:number, url:string}>, expiresAt:number}>}
+ */
+function requestArenaPartUrls(payload, arenaToken) {
+    return apiRequest('POST', '/arena/uploads/parts', payload, {
+        retries: 1,
+        requireAuth: false,
+        headers: { 'X-Arena-Token': arenaToken }
+    });
+}
+
+/**
+ * POST /api/tools/arena/uploads/complete
+ * Fait assembler le fichier par le stockage, à partir de TOUS les morceaux et de
+ * leurs ETags. 409 = envoi plus finalisable (expiré, annulé, morceau manquant) :
+ * il faut le recommencer. La confirmation reste `confirmArenaUpload` / `confirmOtherGameUpload`.
+ *
+ * @param {{roomId:number, arenaId:number, uploadId:string, parts:Array<{partNumber:number, etag:string}>}} payload cible incluse
+ * @param {string} arenaToken
+ * @returns {Promise<void>}
+ */
+function completeArenaMultipartUpload(payload, arenaToken) {
+    return apiRequest('POST', '/arena/uploads/complete', payload, {
         retries: 1,
         requireAuth: false,
         headers: { 'X-Arena-Token': arenaToken }
@@ -761,6 +770,12 @@ function downloadPresignedUrlToFile(
 /**
  * Uploads a local file via HTTP PUT to a presigned URL with retry on
  * network/5xx errors. Resolves on 2xx, throws otherwise.
+ *
+ * `start` / `length` n'envoient qu'une portion du fichier : un morceau d'un envoi
+ * multipart (cf. arena-multipart-upload). L'ETag rendu par le stockage est alors
+ * indispensable — c'est lui qui désigne le morceau à la finalisation.
+ *
+ * @returns {Promise<{status:number, etag:string|null}>}
  */
 async function uploadFileToPresignedUrl(
     presignedUrl,
@@ -769,11 +784,13 @@ async function uploadFileToPresignedUrl(
         retries = DEFAULT_RETRIES,
         baseDelayMs = DEFAULT_BASE_DELAY_MS,
         contentType = 'video/mp4',
-        onProgress /* (percent: 0-100) => void, optionnel */
+        onProgress /* (percent: 0-100) => void, optionnel */,
+        start = 0,
+        length = undefined
     } = {}
 ) {
     const URL_OBJ = new URL(presignedUrl);
-    const SIZE = fs.statSync(filePath).size;
+    const SIZE = length ?? fs.statSync(filePath).size - start;
 
     let lastError = null;
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -789,7 +806,7 @@ async function uploadFileToPresignedUrl(
         // occupée, et continue de recevoir ses mises à jour.
         const RELEASE_BUSY = markBusy();
         try {
-            const STATUS = await new Promise((resolve, reject) => {
+            const RESULT = await new Promise((resolve, reject) => {
                 const REQ = https.request(
                     {
                         hostname: URL_OBJ.hostname,
@@ -811,7 +828,10 @@ async function uploadFileToPresignedUrl(
                                 res.statusCode >= 200 &&
                                 res.statusCode < 300
                             ) {
-                                resolve(res.statusCode);
+                                resolve({
+                                    status: res.statusCode,
+                                    etag: res.headers.etag || null
+                                });
                             } else {
                                 reject(new ApiError(res.statusCode, BODY));
                             }
@@ -831,7 +851,10 @@ async function uploadFileToPresignedUrl(
                     REQ.end();
                     return;
                 }
-                const STREAM = fs.createReadStream(filePath, { end: SIZE - 1 });
+                const STREAM = fs.createReadStream(filePath, {
+                    start,
+                    end: start + SIZE - 1
+                });
                 STREAM.on('error', reject);
                 // Compte les octets envoyés (le stream est paced par la
                 // backpressure de la requête PUT, donc ~= débit réseau réel).
@@ -846,7 +869,7 @@ async function uploadFileToPresignedUrl(
                 }
                 STREAM.pipe(REQ);
             });
-            return STATUS;
+            return RESULT;
         } catch (err) {
             const RETRYABLE =
                 !(err instanceof ApiError) ||
@@ -873,10 +896,11 @@ module.exports = {
     sendArenaHeartbeat,
     requestArenaFileUploadUrl,
     reportArenaFileResult,
-    requestArenaUploadUrl,
-    requestOtherGameUploadUrl,
     confirmOtherGameUpload,
     confirmArenaUpload,
+    startArenaMultipartUpload,
+    requestArenaPartUrls,
+    completeArenaMultipartUpload,
     ingestArenaGames,
     resolveArenaGameId,
     resolveColorChaosGameId,

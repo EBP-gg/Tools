@@ -10,14 +10,16 @@ const chokidar = require('chokidar');
 const arenaModeService = require('./arena-mode-service');
 const arenaPipelineService = require('./arena-pipeline-service');
 const {
-    requestArenaUploadUrl,
-    requestOtherGameUploadUrl,
     confirmOtherGameUpload,
     resolveColorChaosGameId,
     confirmArenaUpload,
-    uploadFileToPresignedUrl,
     ApiError
 } = require('./tools-api-client');
+const {
+    uploadArenaReplayMultipart,
+    clearUploadState,
+    purgeUploadStates
+} = require('./arena-multipart-upload');
 
 //#endregion
 
@@ -26,8 +28,9 @@ const {
 // EVA est dans le nom du fichier (7 champs), une game non identifiée en porte 6
 // et reste invisible ici. Il n'y a donc AUCUNE gate à réévaluer.
 //
-// Un seul appel réseau par game : on demande une URL présignée pour ce gameId et
-// on pousse le fichier. Le serveur choisit l'emplacement DÉFINITIF du replay,
+// Le fichier part par morceaux (cf. arena-multipart-upload) : une coupure ne fait
+// renvoyer que le morceau en cours, et un envoi interrompu reprend où il en
+// était. Le serveur choisit l'emplacement DÉFINITIF du replay,
 // le même que pour une analyse locale.
 // Rien à déposer ensuite. Le fichier local est supprimé une fois l'upload confirmé.
 //
@@ -105,10 +108,16 @@ function getFailedDir() {
     return path.join(path.dirname(getGamesDir()), 'failed');
 }
 
+/** États des envois par morceaux en cours (cf. arena-multipart-upload). */
+function getUploadStateDir() {
+    return path.join(path.dirname(getGamesDir()), 'uploads');
+}
+
 /** Déplace la game vers failed/ (fichier inexploitable). */
 function moveToFailed(filePath) {
     const FAILED = getFailedDir();
     if (!fs.existsSync(FAILED)) fs.mkdirSync(FAILED, { recursive: true });
+    clearUploadState(getUploadStateDir(), filePath);
     try {
         fs.renameSync(filePath, path.join(FAILED, path.basename(filePath)));
     } catch (e) {
@@ -158,6 +167,7 @@ function isUploadable(name) {
 
 /** La vidéo est en place côté S3 : on libère le disque de la salle. */
 function cleanup(filePath) {
+    clearUploadState(getUploadStateDir(), filePath);
     try {
         fs.unlinkSync(filePath);
     } catch (e) {
@@ -184,13 +194,20 @@ function isRefusal(e) {
  * Boucle de retry persistante. `attempt` doit faire l'aller-retour COMPLET
  * (URL fraîche + PUT) : c'est ce qui rend le retry sûr, l'URL présignée d'une
  * tentative ratée pouvant avoir expiré.
+ *
+ * `attempt` reçoit `madeProgress`, à appeler quand l'envoi a avancé (un morceau
+ * passé) : l'attente repart alors du minimum. Sans cela, une connexion instable
+ * mais qui avance ferait vite attendre 10 min entre deux morceaux.
  */
 async function withPersistentRetry(attempt) {
     let delay = RETRY_BASE_DELAY_MS;
+    const MADE_PROGRESS = () => {
+        delay = RETRY_BASE_DELAY_MS;
+    };
     for (;;) {
         if (stopRequested) throw new Error('uploader stopped');
         try {
-            return await attempt();
+            return await attempt(MADE_PROGRESS);
         } catch (e) {
             lastError = e.message;
             if (isRefusal(e)) throw e;
@@ -231,19 +248,30 @@ async function confirmArenaUploadWithRetry(payload, token) {
 }
 
 /**
+ * Envoie le fichier vers le stockage, par morceaux (cf. arena-multipart-upload).
+ * Ne confirme rien : c'est à l'appelant.
+ *
+ * @returns {Promise<string>} ce qui a été fait, pour le log.
+ */
+async function putReplay(filePath, target, ids, token, madeProgress) {
+    const SENT = await uploadArenaReplayMultipart(filePath, target, ids, token, {
+        stateDir: getUploadStateDir(),
+        shouldStop: () => stopRequested,
+        onProgress: madeProgress
+    });
+    return SENT.resumedFrom > 0
+        ? `in ${SENT.partCount} parts (resumed after ${SENT.resumedFrom})`
+        : `in ${SENT.partCount} parts`;
+}
+
+/**
  * Upload S3 avec retry persistant. On envoie le `gameId` EVA : c'est le serveur
  * qui en déduit l'emplacement, Tools ne nomme jamais l'objet. Clé déterministe
  * → un retry réécrit le même objet.
  */
 function uploadWithPersistentRetry(filePath, gameId, ids, token) {
-    return withPersistentRetry(async () => {
-        const UPLOAD = await requestArenaUploadUrl(
-            { roomId: ids.roomId, arenaId: ids.arenaId, gameId },
-            token
-        );
-        await uploadFileToPresignedUrl(UPLOAD.url, filePath, {
-            contentType: 'video/mp4'
-        });
+    return withPersistentRetry(async (madeProgress) => {
+        const SENT = await putReplay(filePath, { gameId }, ids, token, madeProgress);
         // Confirme l'upload : le serveur vérifie l'objet en S3 puis indexe la
         // vidéo. Best-effort — l'objet est déjà envoyé, un
         // échec de confirmation est rattrapé côté serveur.
@@ -251,7 +279,7 @@ function uploadWithPersistentRetry(filePath, gameId, ids, token) {
             { roomId: ids.roomId, arenaId: ids.arenaId, gameId },
             token
         );
-        return UPLOAD.guid;
+        return SENT;
     });
 }
 
@@ -278,11 +306,9 @@ function uploadOtherGameWithPersistentRetry(filePath, gameType, startedAtEpoch, 
         gameType,
         startedAtEpoch
     };
-    return withPersistentRetry(async () => {
-        const UPLOAD = await requestOtherGameUploadUrl(PAYLOAD, token);
-        await uploadFileToPresignedUrl(UPLOAD.url, filePath, {
-            contentType: 'video/mp4'
-        });
+    return withPersistentRetry(async (madeProgress) => {
+        const TARGET = { gameType, startedAtEpoch };
+        const SENT = await putReplay(filePath, TARGET, ids, token, madeProgress);
         const EVA_GAME_ID =
             gameType === 'color-chaos'
                 ? await resolveColorChaosGameIdSafely(PAYLOAD, token)
@@ -291,7 +317,7 @@ function uploadOtherGameWithPersistentRetry(filePath, gameType, startedAtEpoch, 
             EVA_GAME_ID ? { ...PAYLOAD, evaGameId: EVA_GAME_ID } : PAYLOAD,
             token
         );
-        return UPLOAD.key;
+        return SENT;
     });
 }
 
@@ -346,14 +372,14 @@ async function processGame(filePath) {
         const GAME_TYPE = OTHER_GAME_TYPE[OTHER[1]];
         const STARTED_AT = parseInt(OTHER[4], 10);
         console.log(`[arena-uploader] processing ${NAME} (${GAME_TYPE})`);
-        const KEY = await uploadOtherGameWithPersistentRetry(
+        const SENT = await uploadOtherGameWithPersistentRetry(
             filePath,
             GAME_TYPE,
             STARTED_AT,
             IDS,
             TOKEN
         );
-        console.log(`[arena-uploader] uploaded as ${KEY}`);
+        console.log(`[arena-uploader] uploaded ${SENT}`);
         cleanup(filePath);
         uploadedCount++;
         lastError = null;
@@ -371,8 +397,8 @@ async function processGame(filePath) {
     const GAME_ID = NAME.match(GAME_FILE_RE)[3];
     console.log(`[arena-uploader] processing ${NAME} (EVA game ${GAME_ID})`);
 
-    const GUID = await uploadWithPersistentRetry(filePath, GAME_ID, IDS, TOKEN);
-    console.log(`[arena-uploader] uploaded as ${GUID}.mp4`);
+    const SENT = await uploadWithPersistentRetry(filePath, GAME_ID, IDS, TOKEN);
+    console.log(`[arena-uploader] uploaded ${SENT}`);
     cleanup(filePath);
     uploadedCount++;
     lastError = null;
@@ -439,6 +465,7 @@ function enqueue(filePath) {
 function rescanGames() {
     purgeFailed();
     const DIR = getGamesDir();
+    purgeUploadStates(getUploadStateDir(), DIR);
     let entries;
     try {
         entries = fs.readdirSync(DIR);
