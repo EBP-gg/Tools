@@ -94,7 +94,7 @@ let pacing = false;
 // C'est le nom de l'EXÉCUTABLE qui fait foi, jamais le titre de fenêtre : le
 // titre change en cours de partie (carte, score, écran de connexion), le nom
 // d'exe ne bouge pas. Comparaison insensible à la casse.
-const TARGET_EXECUTABLES = ['After-H-EVA-PVP.exe', 'ECC.exe'];
+const TARGET_EXECUTABLES = ['EBA.exe', 'After-H-EVA-PVP.exe', 'ECC.exe'];
 
 const SUPERVISION_MS = 5000;
 // Le helper publie un niveau CHAQUE SECONDE, sur l'horloge murale, même quand
