@@ -72,6 +72,8 @@ const OTHER_GAME_TYPE = {
 };
 const RETRY_BASE_DELAY_MS = 30 * 1000;
 const RETRY_MAX_DELAY_MS = 10 * 60 * 1000;
+// Confirmation After-H : 1 essai + 3 reprises (30 s, 60 s, 120 s).
+const CONFIRM_MAX_ATTEMPTS = 4;
 // Re-scan périodique de games/ : rattrape les games identifiées par un simple
 // renommage, que chokidar peut ne pas ré-émettre.
 const RETRY_SCAN_MS = 2 * 60 * 1000;
@@ -202,6 +204,33 @@ async function withPersistentRetry(attempt) {
 }
 
 /**
+ * Confirmation d'un upload After-H, retentée SEULE sur une erreur passagère
+ * (5xx, réseau) : rejouer tout l'envoi pour elle coûterait des centaines de Mo.
+ * Un refus (404 objet absent, game inconnue) n'est pas retenté. Tentatives
+ * bornées : au-delà, la réconciliation serveur (toutes les 5 min) indexe la
+ * vidéo, et la file des uploads suivants ne doit pas rester bloquée.
+ */
+async function confirmArenaUploadWithRetry(payload, token) {
+    let delay = RETRY_BASE_DELAY_MS;
+    for (let attempt = 1; ; attempt++) {
+        try {
+            await confirmArenaUpload(payload, token);
+            return;
+        } catch (e) {
+            if (isRefusal(e) || attempt >= CONFIRM_MAX_ATTEMPTS || stopRequested) {
+                console.warn(`[arena-uploader] confirm-upload failed (${e.message}), rattrapé par le serveur`);
+                return;
+            }
+            console.warn(
+                `[arena-uploader] confirm-upload failed (${e.message}), retry in ${delay / 1000}s`
+            );
+            await sleep(delay);
+            delay = Math.min(delay * 2, RETRY_MAX_DELAY_MS);
+        }
+    }
+}
+
+/**
  * Upload S3 avec retry persistant. On envoie le `gameId` EVA : c'est le serveur
  * qui en déduit l'emplacement, Tools ne nomme jamais l'objet. Clé déterministe
  * → un retry réécrit le même objet.
@@ -218,14 +247,10 @@ function uploadWithPersistentRetry(filePath, gameId, ids, token) {
         // Confirme l'upload : le serveur vérifie l'objet en S3 puis indexe la
         // vidéo. Best-effort — l'objet est déjà envoyé, un
         // échec de confirmation est rattrapé côté serveur.
-        try {
-            await confirmArenaUpload(
-                { roomId: ids.roomId, arenaId: ids.arenaId, gameId },
-                token
-            );
-        } catch (e) {
-            console.warn(`[arena-uploader] confirm-upload failed (${e.message}), rattrapé par le serveur`);
-        }
+        await confirmArenaUploadWithRetry(
+            { roomId: ids.roomId, arenaId: ids.arenaId, gameId },
+            token
+        );
         return UPLOAD.guid;
     });
 }
