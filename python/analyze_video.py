@@ -6908,7 +6908,35 @@ def _analyze(
             # Décompte OU loading : les deux se suivent sans trou, et c'est cette
             # plage élargie qui rend la marche à 1 s sûre (cf. COUNTDOWN_BOX). Le
             # décompte est testé en premier, il coûte 100 fois moins cher.
-            if _detect_game_countdown_frame(FRAME) or LOADING_TEST(FRAME):
+            IS_COUNTDOWN = _detect_game_countdown_frame(FRAME)
+            # Le même décompte relance la partie après une PAUSE TECHNIQUE : pris
+            # pour le départ, il tronque la game à sa dernière reprise (5 games
+            # sur 9 du corpus Tools-Training/technical_pause). Le chrono les
+            # distingue : au départ il est figé sur la durée configurée, une
+            # minute ronde (08:00, 00:00 pendant le loading) ; à la reprise il
+            # est entamé (03:50). Secondes non nulles = reprise, on continue de
+            # remonter. Chrono illisible = on garde le décompte, comme avant.
+            # Limite : une pause figée pile sur une minute ronde passe encore.
+            # Les modes à podium sont exclus : sans barre d'équipes, leur chrono
+            # est du bruit.
+            COUNTDOWN_REJECTED = False
+            if IS_COUNTDOWN and CURRENT['gameType'] not in RESPAWN_LOADING_TYPES:
+                CD_BOX = _find_timer_box(FRAME, anchor=HUD_ANCHOR)
+                if CD_BOX is None:
+                    CD_BOX = MODES[CURRENT['mode']]['gameFrame']['timer']
+                CD_TEXT = _ocr_region(
+                    FRAME,
+                    CD_BOX[0][0], CD_BOX[0][1], CD_BOX[1][0], CD_BOX[1][1],
+                    psm=7, extra_psms=[8], whitelist='0123456789:',
+                    luminance=100, apply_filter=True, lang='evadigits',
+                )
+                CD_MS = _parse_timer_text(CD_TEXT)
+                if (CD_MS is not None and CD_MS[0] <= TIMER_MAX_PLAUSIBLE_MIN
+                        and CD_MS[1] != 0):
+                    _emit({'log': f'[detect] countdown at {TIMESTAMP:.1f}s rejected: '
+                                  f'timer {CD_MS[0]}:{CD_MS[1]:02d} → reprise après pause technique, pas un départ'})
+                    COUNTDOWN_REJECTED = True
+            if not COUNTDOWN_REJECTED and (IS_COUNTDOWN or LOADING_TEST(FRAME)):
                 if DEBUG:
                     _emit({'log': 'Loading frame found'})
                 CURRENT['startTrigger'] = 'loading'
