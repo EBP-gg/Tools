@@ -1592,6 +1592,11 @@ if (!APP_GOT_THE_LOCK) {
                         if (MSG.type === 'game' && MSG.game) {
                             GAMES.push(MSG.game);
                         }
+                        // Flux headless (mode salle, watch-folder) : personne ne
+                        // lit la fenêtre, le fichier de log est la seule trace.
+                        if (HEADLESS && typeof MSG.log === 'string') {
+                            console.log(`[analyzer] ${MSG.log}`);
+                        }
 
                         socketEmit(socket, 'analyzeVideoFileGames', MSG);
 

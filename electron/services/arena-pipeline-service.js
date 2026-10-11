@@ -170,6 +170,30 @@ function alreadyExtracted(gamesDir, name) {
 }
 
 /**
+ * Une game détectée, en une ligne de log : bornes relatives à la fenêtre et en
+ * heure locale, détecteur de chaque borne, map, scores. Tout ce qu'il faut pour
+ * diagnostiquer une découpe après coup sans les segments, purgés depuis.
+ * @param {object} g game telle que renvoyée par la phase 1.
+ * @param {number} windowStartEpoch
+ */
+function describeGame(g, windowStartEpoch) {
+    const AT = (rel) => {
+        if (typeof rel !== 'number' || rel < 0) return '?';
+        const D = new Date((windowStartEpoch + rel) * 1000);
+        const P = (n) => String(n).padStart(2, '0');
+        return `+${Math.round(rel)}s ${P(D.getHours())}:${P(D.getMinutes())}:${P(D.getSeconds())}`;
+    };
+    const SCORES = `${g.orangeTeam ? g.orangeTeam.score : '?'}-${g.blueTeam ? g.blueTeam.score : '?'}`;
+    return (
+        `type=${g.gameType ?? 'after-h'} mode=${g.mode} map=${g.map || '?'} ` +
+        `start=${AT(g.start)} [${g.startTrigger || (g.startFallback ? 'fallback' : '?')}] ` +
+        `end=${AT(g.end)} [${g.endTrigger || '?'} @ ${AT(g.endTriggerTs)}] ` +
+        `dur=${g.start >= 0 && g.end >= 0 ? Math.round(g.end - g.start) : '?'}s ` +
+        `scores=${SCORES} theme=${g.teamTheme || '?'}`
+    );
+}
+
+/**
  * Epoch (secondes UTC) encodé dans le nom d'un segment `rec_%Y%m%d-%H%M%S.mkv`
  * (strftime ffmpeg en heure LOCALE — Date.UTC ne convient donc pas).
  * @returns {number|null}
@@ -319,8 +343,18 @@ async function processRun(run) {
     // la salle (7 min sur le cas observé), monte à 12 min, et une pause
     // technique peut l'allonger encore. Ce filtre n'est donc pas une mesure de
     // vraisemblance fine, seulement un filet contre les débordements francs.
+    for (const G of DETECT.games || []) {
+        console.log(
+            `[arena-pipeline] detected ${describeGame(G, WINDOW_START_EPOCH)}`
+        );
+    }
     const GAMES = (DETECT.games || []).filter((g) => {
-        if (g.start === -1 || g.startFallback) return false;
+        if (g.start === -1 || g.startFallback) {
+            console.log(
+                `[arena-pipeline] game dropped: no start in window (startFallback) end=+${Math.round(g.end)}s map=${g.map || '?'}`
+            );
+            return false;
+        }
         const LIMIT =
             (g.gameType ?? 'after-h') === 'zombies'
                 ? ZOMBIES_IMPLAUSIBLE_GAME_S
@@ -351,7 +385,12 @@ async function processRun(run) {
     for (const G of GAMES) {
         const START_EPOCH = WINDOW_START_EPOCH + Math.round(G.start);
         const END_EPOCH = WINDOW_START_EPOCH + Math.round(G.end);
-        if (END_EPOCH <= watermark + REEXTRACT_TOLERANCE_S) continue;
+        if (END_EPOCH <= watermark + REEXTRACT_TOLERANCE_S) {
+            console.log(
+                `[arena-pipeline] game skipped: ends at ${END_EPOCH}, under watermark ${watermark} (already consumed) map=${G.map || '?'}`
+            );
+            continue;
+        }
         // Fin de game collée à la fin de fenêtre : la score frame déborde
         // peut-être sur le segment suivant → on attend le round d'après pour
         // découper avec la score frame complète (cf. SCORE_FRAME_GUARD_S).
@@ -404,6 +443,7 @@ async function processRun(run) {
         const OUT = path.join(GAMES_DIR, NAME);
         // Nom déterministe → dédup entre rounds et après redémarrage.
         if (alreadyExtracted(GAMES_DIR, NAME)) {
+            console.log(`[arena-pipeline] game skipped: already extracted ${NAME}`);
             maxExtractedEndEpoch = Math.max(maxExtractedEndEpoch, END_EPOCH);
             continue;
         }
@@ -456,12 +496,21 @@ async function processRun(run) {
         maxExtractedEndEpoch,
         WINDOW_END_EPOCH - HORIZON_S
     );
+    const PREVIOUS_WATERMARK = watermark;
     watermark = Math.max(
         watermark,
         deferredStartEpoch
             ? Math.min(CANDIDATE, deferredStartEpoch - 1)
             : CANDIDATE
     );
+    // Ce qui passe sous le watermark sera purgé au round suivant, sans retour
+    // possible : d'où la raison de chaque avance.
+    if (watermark !== PREVIOUS_WATERMARK) {
+        console.log(
+            `[arena-pipeline] watermark ${PREVIOUS_WATERMARK} → ${watermark} ` +
+                `(last extracted end=${maxExtractedEndEpoch || '-'}, horizon floor=${WINDOW_END_EPOCH - HORIZON_S}, deferred start=${deferredStartEpoch || '-'})`
+        );
+    }
 
     try {
         fs.unlinkSync(WINDOW_PATH);

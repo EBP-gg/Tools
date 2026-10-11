@@ -6321,6 +6321,10 @@ def _new_game(mode: int, game_type: str = GAME_TYPE_AFTER_H) -> dict:
     game_type    : jeu détecté. `mode` reste l'index MODES d'After-H (géométrie
                    du score frame) et n'a de sens que pour GAME_TYPE_AFTER_H —
                    les consommateurs doivent lire `gameType` en premier.
+    endTrigger / endTriggerTs / startTrigger : détecteur qui a posé chaque
+                   borne, et instant de la frame qui a déclenché la fin. Pur
+                   diagnostic, hors DEBUG : sans eux, une fausse fin relevée en
+                   salle (Horizon, Rouen, 11/10/2026) n'a laissé aucune trace.
     """
     return {
         'gameType': game_type,
@@ -6338,6 +6342,9 @@ def _new_game(mode: int, game_type: str = GAME_TYPE_AFTER_H) -> dict:
         '__nojump__': False,
         'teamTheme': None,
         '__themeVotes__': {},
+        'endTrigger': None,
+        'endTriggerTs': None,
+        'startTrigger': None,
         'orangeTeam': {
             'score': 0,
             'scoreImage': None,
@@ -6528,6 +6535,8 @@ def _analyze(
                     game_type=GAME_TYPE_GUN_GAME if IS_GUN_GAME else GAME_TYPE_AFTER_H,
                 )
                 GAME['end'] = TIMESTAMP - 1
+                GAME['endTrigger'] = 'score-frame'
+                GAME['endTriggerTs'] = TIMESTAMP
                 # Les scores d'équipe n'ont de sens qu'en After-H : une game
                 # d'arme se joue à la progression d'armes, par joueur.
                 if not IS_GUN_GAME:
@@ -6609,6 +6618,8 @@ def _analyze(
                     # la map que si elle est encore vide.
                     GAME['map'] = PODIUM_MAP
                     GAME['end'] = TIMESTAMP - 1
+                    GAME['endTrigger'] = 'podium'
+                    GAME['endTriggerTs'] = TIMESTAMP
                     GAMES.insert(0, GAME)
                     CURRENT = GAME
 
@@ -6621,6 +6632,8 @@ def _analyze(
                 JUST_JUMPED = False
                 GAME = _new_game(1)
                 GAME['end'] = TIMESTAMP
+                GAME['endTrigger'] = 'end-frame'
+                GAME['endTriggerTs'] = TIMESTAMP
                 EF = MODES[1]['endFrame']
                 _set_score(GAME, 'orangeTeam', _ocr_region(
                     FRAME,
@@ -6653,6 +6666,8 @@ def _analyze(
                 FOUND = True
                 JUST_JUMPED = False
                 GAME = _new_game(0, game_type=GAME_TYPE_COLOR_CHAOS)
+                GAME['endTrigger'] = 'color-chaos-timer'
+                GAME['endTriggerTs'] = TIMESTAMP
                 GAME['end'] = min(
                     _scan_while(
                         CAP, TIMESTAMP, _detect_color_chaos_timer_hud,
@@ -6675,6 +6690,7 @@ def _analyze(
                 CURRENT['start'] = _scan_while(
                     CAP, TIMESTAMP, _detect_color_chaos_intro,
                 ) + CC_CUT_MARGIN_S
+                CURRENT['startTrigger'] = 'color-chaos-intro'
                 if DEBUG:
                     _emit({'log': f'Color Chaos game {CURRENT["start"]:.1f}s → {CURRENT["end"]:.1f}s'})
                 _emit({'type': 'game', 'game': CURRENT})
@@ -6688,6 +6704,8 @@ def _analyze(
                 FOUND = True
                 JUST_JUMPED = False
                 GAME = _new_game(0, game_type=GAME_TYPE_ZOMBIES)
+                GAME['endTrigger'] = 'zombies-outro'
+                GAME['endTriggerTs'] = TIMESTAMP
                 # Dernière frame du tableau final, moins la marge. L'outro dure
                 # plus longtemps que les autres, d'où le max_span élargi.
                 GAME['end'] = _scan_while(
@@ -6776,6 +6794,8 @@ def _analyze(
                     JUST_JUMPED = False
                     GAME = _new_game(0, game_type=GAME_TYPE_ZOMBIES)
                     GAME['end'] = PLAY_END + ZB_END_NO_OUTRO_MARGIN_S
+                    GAME['endTrigger'] = 'zombies-play-end'
+                    GAME['endTriggerTs'] = TIMESTAMP
                     GAMES.insert(0, GAME)
                     CURRENT = GAME
                 if not FOUND:
@@ -6802,6 +6822,8 @@ def _analyze(
                 # fichier `0-0`, comme il le fait déjà pour une game Zombies.
                 GAME = _new_game(0)
                 GAME['end'] = TIMESTAMP - 1
+                GAME['endTrigger'] = 'victory'
+                GAME['endTriggerTs'] = TIMESTAMP
                 GAMES.insert(0, GAME)
                 CURRENT = GAME
 
@@ -6863,6 +6885,7 @@ def _analyze(
                 CURRENT['start'] = _scan_while(
                     CAP, TIMESTAMP, _detect_loading_frame_strict,
                 ) + ZB_CUT_START_MARGIN_S
+                CURRENT['startTrigger'] = 'zombies-loading'
                 if DEBUG:
                     _emit({'log': f'Zombies game {CURRENT["start"]:.1f}s → {CURRENT["end"]:.1f}s'})
                 _emit({'type': 'game', 'game': CURRENT})
@@ -6888,6 +6911,7 @@ def _analyze(
             if _detect_game_countdown_frame(FRAME) or LOADING_TEST(FRAME):
                 if DEBUG:
                     _emit({'log': 'Loading frame found'})
+                CURRENT['startTrigger'] = 'loading'
                 FOUND = True
                 JUST_JUMPED = False
                 # Scan forward to find the first actual gameplay frame.
@@ -6944,6 +6968,7 @@ def _analyze(
             if _detect_game_intro(FRAME):
                 if DEBUG:
                     _emit({'log': 'Game intro frame found'})
+                CURRENT['startTrigger'] = 'intro'
                 FOUND = True
                 JUST_JUMPED = False
                 # Scan forward to find the first actual gameplay frame.
@@ -7155,6 +7180,7 @@ def _analyze(
             # affiner, la game commence au plus tôt au début de la vidéo.
             CURRENT['start'] = 0.0
         CURRENT['startFallback'] = True
+        CURRENT['startTrigger'] = 'fallback'
         _emit({'type': 'game', 'game': CURRENT})
 
     CAP.release()
