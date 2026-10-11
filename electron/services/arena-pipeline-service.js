@@ -8,7 +8,11 @@ const fs = require('fs');
 const path = require('node:path');
 const chokidar = require('chokidar');
 const { safeMapName } = require('./global-service');
-const { cutCopyGame, concatCopySegments } = require('./video-service');
+const {
+    cutCopyGame,
+    concatCopySegments,
+    cutOutRangesCopy
+} = require('./video-service');
 const arenaModeService = require('./arena-mode-service');
 const arenaCaptureService = require('./arena-capture-service');
 
@@ -166,6 +170,52 @@ function alreadyExtracted(gamesDir, name) {
         return fs.readdirSync(gamesDir).some((f) => f.endsWith(SUFFIX));
     } catch (_) {
         return false;
+    }
+}
+
+/**
+ * Retire les pauses techniques d'une game découpée, en place. After-H seul :
+ * la détection lit le chrono du HUD d'équipes, que les autres modes n'ont pas
+ * (ou pas au même endroit) et sur lesquels elle n'a pas été mesurée.
+ *
+ * Tout échec laisse la vidéo telle quelle, pauses comprises : une game avec
+ * ses pauses vaut mieux qu'une game perdue. C'est aussi le cas d'un analyseur
+ * antérieur à la sous-commande `pauses`, qui la refuse.
+ * @param {string} videoPath vidéo de la game, modifiée en place.
+ * @param {string} gameType
+ */
+async function removeTechnicalPauses(videoPath, gameType) {
+    if (gameType !== 'after-h' || !deps.runPauseDetector) return;
+    let pauses;
+    try {
+        pauses = await deps.runPauseDetector(videoPath);
+    } catch (e) {
+        console.warn(
+            `[arena-pipeline] pause detection failed, game kept as is: ${e.message}`
+        );
+        return;
+    }
+    if (pauses.length === 0) {
+        console.log('[arena-pipeline] no technical pause');
+        return;
+    }
+    const TOTAL = pauses.reduce((s, p) => s + (p.end - p.start), 0);
+    console.log(
+        `[arena-pipeline] ${pauses.length} technical pause(s), ${Math.round(TOTAL)}s to remove: ` +
+            pauses.map((p) => `${p.start}s→${p.end}s (${p.timer})`).join(', ')
+    );
+    const TMP = videoPath + '.nopause.mp4';
+    try {
+        await cutOutRangesCopy(videoPath, TMP, pauses, true);
+        fs.renameSync(TMP, videoPath);
+        console.log('[arena-pipeline] technical pauses removed');
+    } catch (e) {
+        console.warn(
+            `[arena-pipeline] pause removal failed, game kept as is: ${e.message}`
+        );
+        try {
+            fs.unlinkSync(TMP);
+        } catch (_) {}
     }
 }
 
@@ -452,14 +502,21 @@ async function processRun(run) {
         // déjà au format web (H.264, GOP 1 s) — le lecteur du site lit ces
         // fichiers comme ceux du watch-folder, sans qu'on ait payé un
         // réencodage. Marge de 1 s : la coupe démarre à la keyframe précédente.
+        //
+        // La découpe se fait dans work/ et le fichier n'entre dans games/ qu'une
+        // fois ses pauses retirées : le service d'identification scrute games/,
+        // il ne doit jamais voir une version intermédiaire.
+        const CUT = path.join(WORK, NAME);
         await cutCopyGame(
             WINDOW_PATH,
-            OUT,
+            CUT,
             G.start,
             G.end,
             ARENA_CUT_MARGIN_S,
             true
         );
+        await removeTechnicalPauses(CUT, GAME_TYPE);
+        fs.renameSync(CUT, OUT);
         // Pas de sidecar : le PC de salle ne fait JAMAIS l'analyse (phase 2), qui
         // reste sur le PC du joueur. Tout ce dont la suite a besoin — arène,
         // gameId après identification, map, bornes absolues — est dans le nom du
@@ -550,7 +607,8 @@ async function runRound() {
  * Démarre le consommateur : un round à chaque nouveau segment fermé (l'ajout
  * du segment N ferme le N-1), plus un round périodique de rattrapage (fin de
  * captation : le dernier segment ne serait jamais suivi d'un N+1).
- * @param {{runAnalyzer: Function}} dependencies même injection que le watch-folder.
+ * @param {{runAnalyzer: Function, runPauseDetector?: Function}} dependencies même
+ *   injection que le watch-folder, plus la détection des pauses techniques.
  */
 function start(dependencies) {
     if (watcher) return;

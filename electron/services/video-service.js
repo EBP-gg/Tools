@@ -567,6 +567,148 @@ async function concatCopySegments(inputPaths, outputPath, lowPriority = false) {
 }
 
 /**
+ * Instants (s, horodatage du fichier) des keyframes vidéo. ffmpeg seul (pas de
+ * ffprobe embarqué) : `-skip_frame nokey` ne décode que les keyframes,
+ * `-copyts` garde les horodatages du fichier, ceux qu'attend `inpoint`.
+ * @param {string} inputPath
+ * @param {boolean} lowPriority
+ * @returns {Promise<number[]>} triés.
+ */
+function listKeyframes(inputPath, lowPriority = false) {
+    return new Promise((resolve, reject) => {
+        const FFMPEG = spawn(FFMPEG_PATH, [
+            '-hide_banner',
+            '-copyts',
+            '-skip_frame',
+            'nokey',
+            '-i',
+            inputPath,
+            '-an',
+            '-vf',
+            'showinfo',
+            '-f',
+            'null',
+            '-'
+        ]);
+        if (lowPriority) lowerProcessPriority(FFMPEG, 'FFMPEG keyframes');
+        const TIMES = [];
+        let buffer = '';
+        FFMPEG.stderr.on('data', (data) => {
+            buffer += data.toString();
+            const LINES = buffer.split('\n');
+            buffer = LINES.pop();
+            for (const LINE of LINES) {
+                const M = LINE.match(/pts_time:([\d.]+)/);
+                if (M) TIMES.push(parseFloat(M[1]));
+            }
+        });
+        FFMPEG.on('close', (code) => {
+            if (code === 0 && TIMES.length > 0) resolve(TIMES.sort((a, b) => a - b));
+            else reject(new Error(`keyframe listing failed (code ${code})`));
+        });
+        FFMPEG.on('error', reject);
+    });
+}
+
+/**
+ * Retire des plages d'une vidéo en stream-copy (pauses techniques d'une game de
+ * salle) : le concat demuxer relit le MÊME fichier une fois par plage gardée,
+ * bornée par `inpoint` / `outpoint`. Pas de réencodage.
+ *
+ * Chaque reprise est calée sur une keyframe : en stream-copy la vidéo ne peut
+ * repartir que d'une keyframe, l'audio repart à l'instant exact — une reprise
+ * hors keyframe décale l'image du son (+2,2 s mesurés sur un GOP de 4 s). On
+ * prend la dernière keyframe avant la fin de la plage : on garde au plus un GOP
+ * de pause (1 s de décompte en salle) plutôt que de perdre du jeu.
+ * @param {string} inputPath
+ * @param {string} outputPath Destination .mp4 (écrasée si elle existe).
+ * @param {{start:number, end:number}[]} cutRanges Plages à retirer (s), triées.
+ * @param {boolean} lowPriority Passe ffmpeg en BELOW_NORMAL (mode salle).
+ */
+async function cutOutRangesCopy(inputPath, outputPath, cutRanges, lowPriority = false) {
+    if (fs.existsSync(outputPath)) {
+        unlinkSync(outputPath);
+    }
+
+    const KEYFRAMES = await listKeyframes(inputPath, lowPriority);
+    const FILE = `file '${inputPath.replace(/'/g, "'\\''")}'`;
+    const LINES = [];
+    let from = KEYFRAMES[0];
+    for (const R of cutRanges) {
+        if (R.start > from) {
+            LINES.push(FILE, `inpoint ${from}`, `outpoint ${R.start}`);
+        }
+        // Dernière keyframe dans la plage ; à défaut (plage plus courte qu'un
+        // GOP), la première après.
+        const INSIDE = KEYFRAMES.filter((k) => k > R.start && k <= R.end);
+        const AFTER = KEYFRAMES.find((k) => k >= R.end);
+        const RESUME = INSIDE.length > 0 ? INSIDE[INSIDE.length - 1] : AFTER;
+        if (RESUME === undefined) {
+            // Pause jusqu'au bout du fichier : rien à garder après.
+            from = null;
+            break;
+        }
+        from = Math.max(from, RESUME);
+    }
+    // Dernière plage : jusqu'à la fin du fichier, sans outpoint.
+    if (from !== null) LINES.push(FILE, `inpoint ${from}`);
+    const LIST_PATH = outputPath + '.txt';
+    fs.writeFileSync(LIST_PATH, LINES.join('\n'), 'utf8');
+
+    return new Promise((resolve, reject) => {
+        const FFMPEG_ARGS = [
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            LIST_PATH,
+            '-c',
+            'copy',
+            '-avoid_negative_ts',
+            'make_zero',
+            '-movflags',
+            '+faststart',
+            outputPath
+        ];
+
+        console.log(
+            `[FFMPEG] Cut out ranges - Executing: ${FFMPEG_PATH} ${FFMPEG_ARGS.join(' ')} (${LINES.join(' | ')})`
+        );
+
+        const FFMPEG = spawn(FFMPEG_PATH, FFMPEG_ARGS);
+        if (lowPriority) lowerProcessPriority(FFMPEG, 'FFMPEG cut out ranges');
+
+        FFMPEG.stderr.on('data', (data) => {
+            console.log(`[FFMPEG] Cut out ranges - ${data.toString().trim()}`);
+        });
+
+        const cleanup = () => {
+            try {
+                unlinkSync(LIST_PATH);
+            } catch (_) {}
+        };
+
+        FFMPEG.on('close', (code) => {
+            cleanup();
+            if (code === 0 && fs.existsSync(outputPath)) {
+                resolve(outputPath);
+            } else {
+                if (fs.existsSync(outputPath)) {
+                    unlinkSync(outputPath);
+                }
+                reject(new Error(`FFmpeg process exited with code ${code}`));
+            }
+        });
+
+        FFMPEG.on('error', (err) => {
+            cleanup();
+            reject(err);
+        });
+    });
+}
+
+/**
  * Appends a few seconds of a still image to the END of a video, re-encoding the
  * whole file. Used to artificially create the end-of-game team score frame that
  * Tools needs to bound a game when the source video doesn't contain it.
@@ -830,6 +972,7 @@ module.exports = {
     cutAndEncodeGame,
     cutCopyGame,
     concatCopySegments,
+    cutOutRangesCopy,
     appendImageTail,
     renderTeamScoreImage
 };

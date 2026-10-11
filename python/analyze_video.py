@@ -12,6 +12,7 @@ import re
 import base64
 import statistics
 import time
+import subprocess
 import numpy as np
 import cv2
 import threading
@@ -7215,6 +7216,136 @@ def _analyze(
 
     _emit({'type': 'done', 'zombiesInProgress': ZOMBIES_IN_PROGRESS})
 
+
+# ---------------------------------------------------------------------------
+# Pauses techniques — chrono figé pendant une game déjà bornée
+# ---------------------------------------------------------------------------
+# Pendant une pause technique le HUD reste affiché, un bandeau « TECHNICAL
+# PAUSE » flotte dans le décor (position variable), le chrono est figé, puis la
+# partie repart par un décompte 4-3-2-1-0, chrono toujours figé. La plage
+# « chrono figé » couvre donc pause ET décompte : c'est elle qu'on retire.
+#
+# Mesuré sur Tools-Training/technical_pause (13 pauses, 9 games) : toutes
+# trouvées à ±1 s, aucune fausse pause.
+
+# Les chiffres du chrono sont sombres sur une pastille grise SEMI-TRANSPARENTE :
+# le décor vu au travers fait varier son gris, pas les chiffres. On ne compare
+# donc que le masque des pixels sombres d'une seconde à l'autre.
+PAUSE_DIGIT_DARK = 80
+# Part maximale de pixels du masque qui changent pour dire « chrono figé ».
+PAUSE_FROZEN_XOR_MAX = 0.02
+# Durée mini d'une série figée : en jeu le chrono change chaque seconde.
+PAUSE_MIN_S = 4
+# Ce qui passe sur la pastille (icônes, effets) coupe une pause en morceaux :
+# on recolle ceux qui affichent la même valeur à moins de 3 s d'écart.
+PAUSE_MERGE_GAP_S = 3
+
+
+def _read_timer_value(cap, ts: float, box):
+    """(minutes, secondes) lues sur le chrono à `ts`, ou None si illisible."""
+    FRAME = _get_frame(cap, ts)
+    if FRAME is None:
+        return None
+    MS = _parse_timer_text(_ocr_region(
+        FRAME, box[0][0], box[0][1], box[1][0], box[1][1],
+        psm=7, extra_psms=[8], whitelist='0123456789:',
+        luminance=100, apply_filter=True, lang='evadigits',
+    ))
+    if MS is None or MS[0] > TIMER_MAX_PLAUSIBLE_MIN:
+        return None
+    return MS
+
+
+def _detect_technical_pauses(video_path: str, ffmpeg_path: str) -> None:
+    """
+    Pauses techniques d'une vidéo contenant UNE game After-H déjà bornée (mode
+    salle, après découpe). Émet un message `pause` par pause trouvée puis
+    `done` avec la liste complète ; bornes en secondes depuis le début du
+    fichier, `end` = première seconde où le chrono est reparti.
+
+      1. chrono localisé une fois (ancre HUD sur une frame de gameplay) ;
+      2. ffmpeg extrait la boîte du chrono à 1 i/s, en niveaux de gris ;
+      3. séries d'au moins PAUSE_MIN_S secondes où le masque des chiffres ne
+         change pas ;
+      4. valeur figée lue une fois par série : illisible ou 00:00 (prolongation
+         de Domination, écran de fin) = pas une pause ; morceaux de même valeur
+         recollés ;
+      5. bornes affinées à la seconde en relisant le chrono de part et d'autre.
+    """
+    if not os.path.isfile(video_path):
+        _emit({'type': 'error', 'message': f'Cannot open video: {video_path}'})
+        return
+    CAP = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    if not CAP.isOpened():
+        _emit({'type': 'error', 'message': f'Cannot open video: {video_path}'})
+        return
+    DURATION = _get_video_duration(CAP)
+
+    BOX = None
+    for TS in np.arange(20.0, max(DURATION - 30.0, 20.0), 7.0):
+        FRAME = _get_frame(CAP, TS)
+        if FRAME is not None and _detect_game_playing(FRAME):
+            ANCHOR = _find_playing_top_anchor(FRAME)
+            if ANCHOR is not None:
+                BOX = _find_timer_box(FRAME, anchor=ANCHOR)
+                break
+    if BOX is None:
+        _emit({'log': '[pauses] chrono introuvable — aucune pause cherchée'})
+        CAP.release()
+        _emit({'type': 'done', 'pauses': []})
+        return
+
+    (X1, Y1), (X2, Y2) = BOX
+    W, H = X2 - X1, Y2 - Y1
+    RAW = subprocess.run(
+        [ffmpeg_path, '-v', 'error', '-i', video_path,
+         '-vf', f'fps=1,crop={W}:{H}:{X1}:{Y1},format=gray',
+         '-f', 'rawvideo', '-'],
+        capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+    ).stdout
+    MASKS = np.frombuffer(RAW, np.uint8).reshape(-1, H, W) < PAUSE_DIGIT_DARK
+    # FROZEN[i] : rien n'a bougé entre la seconde i et la seconde i+1.
+    FROZEN = (MASKS[1:] ^ MASKS[:-1]).mean(axis=(1, 2)) < PAUSE_FROZEN_XOR_MAX
+
+    PAUSES = []   # [start, end, (m, s)] ; end = dernière seconde figée vue
+    I = 0
+    while I < len(FROZEN):
+        if not FROZEN[I]:
+            I += 1
+            continue
+        J = I
+        while J < len(FROZEN) and FROZEN[J]:
+            J += 1
+        if J - I >= PAUSE_MIN_S:
+            MS = _read_timer_value(CAP, I + 1, BOX)
+            if MS is not None and MS != (0, 0):
+                if (PAUSES and PAUSES[-1][2] == MS
+                        and I - PAUSES[-1][1] <= PAUSE_MERGE_GAP_S):
+                    PAUSES[-1][1] = J
+                else:
+                    PAUSES.append([I, J, MS])
+        I = J
+
+    RESULT = []
+    for START, LAST, MS in PAUSES:
+        # Le masque se laisse retarder par ce qui passe sur la pastille (+3 et
+        # +4 s relevés) ; le chrono, lui, affiche la même valeur d'un bout à
+        # l'autre de la pause.
+        while START > 0 and _read_timer_value(CAP, START - 1, BOX) == MS:
+            START -= 1
+        END = LAST + 1
+        while END < DURATION and _read_timer_value(CAP, END, BOX) == MS:
+            END += 1
+        PAUSE = {'start': float(START), 'end': float(END),
+                 'timer': f'{MS[0]:02d}:{MS[1]:02d}'}
+        RESULT.append(PAUSE)
+        _emit({'log': f'[pauses] pause {START}s → {END}s ({END - START}s, chrono figé à {PAUSE["timer"]})'})
+        _emit({'type': 'pause', 'pause': PAUSE})
+
+    CAP.release()
+    _emit({'type': 'done', 'pauses': RESULT})
+
 #region Chunk analysis — phase 2 : score timeline indexée par le timer in-game
 
 def _parse_timer_text(timer_text: str):
@@ -8498,6 +8629,11 @@ def main() -> None:
         → phase 2 : analyse approfondie des chunks pré-identifiés.
           settings : { maxTimePerGame?, chunks: [{startSeconds, endSeconds, gameID, mode}] }
           stdout   : { percent, results: [{gameID, generated_by, payload}] }
+      pauses <video> <ffmpeg> [tess]
+        → pauses techniques d'une vidéo contenant UNE game After-H bornée
+          (mode salle, avant upload).
+          stdout   : { type: 'pause'|'done'|'error', ... } — `done.pauses` =
+                     [{start, end, timer}] en secondes depuis le début du fichier
 
     Rétro-compat : si argv[1] n'est pas une sous-commande connue, on assume
     'detect' et on shift les arguments — l'invocation historique
@@ -8558,7 +8694,7 @@ def main() -> None:
         _emit({'type': 'scoreboard', 'result': RESULT})
         sys.exit(0)
 
-    if sys.argv[1] in ('detect', 'chunks'):
+    if sys.argv[1] in ('detect', 'chunks', 'pauses'):
         SUBCOMMAND = sys.argv[1]
         OFFSET = 2
     else:
@@ -8566,7 +8702,7 @@ def main() -> None:
         OFFSET = 1
 
     if len(sys.argv) < OFFSET + 2:
-        _emit({'type': 'error', 'message': 'Usage: analyze_video <detect|chunks> <video_path> <ffmpeg_path> [tesseract_cmd] [settings_json]'})
+        _emit({'type': 'error', 'message': 'Usage: analyze_video <detect|chunks|pauses> <video_path> <ffmpeg_path> [tesseract_cmd] [settings_json]'})
         sys.exit(1)
 
     VIDEO_PATH  = sys.argv[OFFSET]
@@ -8611,6 +8747,12 @@ def main() -> None:
         MAX_TIME = int(SETTINGS.get('maxTimePerGame', 10))
         try:
             _analyze(VIDEO_PATH, FFMPEG_PATH, MAX_TIME)
+        except Exception as EXC:
+            _emit({'type': 'error', 'message': str(EXC)})
+            sys.exit(1)
+    elif SUBCOMMAND == 'pauses':
+        try:
+            _detect_technical_pauses(VIDEO_PATH, FFMPEG_PATH)
         except Exception as EXC:
             _emit({'type': 'error', 'message': str(EXC)})
             sys.exit(1)

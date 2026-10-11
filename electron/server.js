@@ -1696,6 +1696,63 @@ if (!APP_GOT_THE_LOCK) {
     }
 
     /**
+     * Pauses techniques d'une vidéo contenant UNE game After-H bornée (mode
+     * salle, avant upload) : sous-commande `pauses` du binaire Python. Headless
+     * et en priorité basse, comme la détection du pipeline.
+     * @param {string} videoPath
+     * @returns {Promise<{start:number, end:number, timer:string}[]>} bornes en
+     * secondes depuis le début du fichier ; rejette si l'analyseur échoue.
+     */
+    function runPauseDetector(videoPath) {
+        return new Promise((resolve, reject) => {
+            const RUNNER = getAnalyzerSpawn();
+            const ANALYZER = spawn(
+                RUNNER.command,
+                [...RUNNER.prefixArgs, 'pauses', videoPath, FFMPEG_PATH, '', '{}'],
+                {
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                    cwd: RUNNER.cwd,
+                    windowsHide: true
+                }
+            );
+            lowerProcessPriority(ANALYZER, 'pause detector');
+            let BUFFER = '';
+            let RESULT = null;
+            const onLine = (LINE) => {
+                if (!LINE.trim()) return;
+                let MSG;
+                try {
+                    MSG = JSON.parse(LINE);
+                } catch (_) {
+                    return;
+                }
+                if (typeof MSG.log === 'string') {
+                    console.log(`[analyzer] ${MSG.log}`);
+                } else if (MSG.type === 'done') {
+                    RESULT = MSG.pauses || [];
+                } else if (MSG.type === 'error') {
+                    RESULT = new Error(MSG.message);
+                }
+            };
+            ANALYZER.stdout.on('data', (data) => {
+                BUFFER += data.toString();
+                const LINES = BUFFER.split('\n');
+                BUFFER = LINES.pop();
+                LINES.forEach(onLine);
+            });
+            ANALYZER.stderr.on('data', (data) => {
+                console.error('[analyzer stderr]', data.toString());
+            });
+            ANALYZER.on('close', (code) => {
+                onLine(BUFFER);
+                if (Array.isArray(RESULT)) resolve(RESULT);
+                else reject(RESULT || new Error(`pause detector exited with code ${code}`));
+            });
+            ANALYZER.on('error', reject);
+        });
+    }
+
+    /**
      * Phase 2 : analyse approfondie de chunks pré-identifiés (timer + scores in-game).
      * Stream les events JSON-lines du binaire Python sur le socket
      * `analyzeVideoFileChunkAnalysis` du front. Le payload émis a la forme
@@ -2330,7 +2387,7 @@ if (!APP_GOT_THE_LOCK) {
                 arenaCaptureService.autoStart();
             }
             try {
-                arenaPipelineService.start({ runAnalyzer });
+                arenaPipelineService.start({ runAnalyzer, runPauseDetector });
                 arenaUploaderService.start();
             } catch (e) {
                 console.error('[arena-pipeline] failed to start', e);
@@ -2869,7 +2926,7 @@ if (!APP_GOT_THE_LOCK) {
                     // La salle vient d'être activée : consommateur du spool et
                     // uploader démarrent (idempotents). Le poller EVA tourne
                     // déjà, il verra le mode actif au tour suivant.
-                    arenaPipelineService.start({ runAnalyzer });
+                    arenaPipelineService.start({ runAnalyzer, runPauseDetector });
                     arenaUploaderService.start();
                     discordRpc.setActivity();
                     return { success: true, state: STATE };
@@ -2979,7 +3036,7 @@ if (!APP_GOT_THE_LOCK) {
                 // réussi, ancien sinon) — la queue se reconstruit par re-scan.
                 if (arenaModeService.getState().registered) {
                     try {
-                        arenaPipelineService.start({ runAnalyzer });
+                        arenaPipelineService.start({ runAnalyzer, runPauseDetector });
                         arenaUploaderService.start();
                     } catch (e) {
                         console.error('[arena] services restart failed', e);
