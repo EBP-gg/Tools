@@ -188,6 +188,8 @@ arenaModeService.setStatusProvider(() => {
                 lastError: UPLOADER.lastError
             },
             update: telemetryService.getUpdateHealth(),
+            // Soucis à code, affichés et mailés par le site (cf. getIssues).
+            issues: arenaCaptureService.getIssues(),
             diskFreeBytes: CAPTURE.diskFreeBytes
         }
     };

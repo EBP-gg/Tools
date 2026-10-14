@@ -113,6 +113,20 @@ const PREVIEW_WIDTH = 480;
 // la branche d'aperçu (déjà en RAM, 1 image / 2 s), il ne coûte rien ; ffmpeg
 // logge `freeze_start` puis `freeze_end`, recopiés dans les logs.
 const FREEZE_FILTER = 'freezedetect=d=60';
+// Cadre du jeu : la plus grande zone non noire vue depuis le début de la
+// captation (`reset=0`), mesurée sur la fenêtre du jeu AVANT la scène. Un jeu
+// en fenêtre et non en plein écran (barre de titre + barre des tâches) est
+// ramené en 1080p avec des bandes noires, et son interface ne tombe plus là où
+// l'analyseur la cherche : relevé à Nîmes le 14/10/2026, 1920×1000 utiles, le
+// décompte de départ 43 px trop haut et une game coupée 100 s trop tôt.
+const FRAME_PROBE_WIDTH = 480;
+const FRAME_PROBE_HEIGHT = 270;
+const FRAME_FILTER = `fps=1,scale=${FRAME_PROBE_WIDTH}:${FRAME_PROBE_HEIGHT},format=gray,cropdetect=limit=24:round=2:reset=0,nullsink`;
+// Le verdict attend que le jeu ait montré une image claire jusqu'aux bords :
+// une minute suffit en plein écran (mesuré à Rouen), un menu sombre peut durer.
+const FRAME_CHECK_MS = 5 * 60 * 1000;
+// Plein cadre à 97 % près : ~8 lignes de 270, une barre de titre seule en fait 10.
+const FRAME_FULL_RATIO = 0.97;
 const RESTART_MAX_DELAY_MS = 60 * 1000;
 // Plus aucune image encodée depuis ce délai alors que ffmpeg tourne : le graphe
 // est bloqué (une webcam qui cesse d'émettre peut suffire à le figer). On tue
@@ -146,6 +160,9 @@ let stderrTail = [];
 // Première image reçue de la source. Tant qu'elle n'est pas arrivée, RIEN
 // n'est enregistré.
 let videoStarted = false;
+// Verdict sur le cadre du jeu (cf. FRAME_FILTER), null avant FRAME_CHECK_MS :
+// { width, height } en pixels 1080p et `full` s'il remplit l'image.
+let gameFrame = null;
 // Webcam de la scène écartée après une panne de ffmpeg : l'enregistrement
 // continue sans elle jusqu'à ce qu'elle réapparaisse (cf. scheduleWebcamRetry).
 let webcamSuspended = false;
@@ -344,7 +361,7 @@ function sceneArgs(overlays, firstInput) {
             '-framerate', String(OUTPUT_FPS),
             '-i', `${SCREEN ? SCREEN.id : 0}:none`
         );
-        CHAINS.push(`[${input++}:v]scale=1920:1080[s0]`);
+        CHAINS.push(`[${input++}:v]scale=1920:1080[game]`);
     } else {
         // Le jeu repéré au démarrage (cf. waitForGame) ; à défaut, n'importe
         // lequel des jeux connus — un seul tourne à la fois.
@@ -354,9 +371,11 @@ function sceneArgs(overlays, firstInput) {
             .map((exe) => exe.replace(/\.exe$/i, ''))
             .join('|');
         CHAINS.push(
-            `gfxcapture=window_exe='(?i)${EXES}':max_framerate=60:capture_cursor=0:width=1920:height=1080:resize_mode=scale_aspect,hwdownload,format=bgra[s0]`
+            `gfxcapture=window_exe='(?i)${EXES}':max_framerate=60:capture_cursor=0:width=1920:height=1080:resize_mode=scale_aspect,hwdownload,format=bgra[game]`
         );
     }
+    // Branche de contrôle du cadre du jeu (cf. FRAME_FILTER).
+    CHAINS.push(`[game]split=2[s0][frame]`, `[frame]${FRAME_FILTER}`);
     overlays.forEach((item, i) => {
         if (item.kind === 'webcam') {
             ARGS.push(
@@ -514,6 +533,56 @@ function killOrphanCaptures(spool) {
  * cours.
  * @param {boolean} gameFound Vrai quand waitForGame vient de trouver le jeu.
  */
+/**
+ * Tient le verdict sur le cadre du jeu à jour et logge chaque changement.
+ * @param {number} width  Largeur non noire, en pixels de la sonde.
+ * @param {number} height Hauteur non noire, en pixels de la sonde.
+ */
+function checkGameFrame(width, height) {
+    const FULL =
+        width >= FRAME_PROBE_WIDTH * FRAME_FULL_RATIO &&
+        height >= FRAME_PROBE_HEIGHT * FRAME_FULL_RATIO;
+    if (gameFrame && gameFrame.full === FULL) return;
+    gameFrame = {
+        width: Math.round((width * 1920) / FRAME_PROBE_WIDTH),
+        height: Math.round((height * 1080) / FRAME_PROBE_HEIGHT),
+        full: FULL,
+        since: Date.now()
+    };
+    // Battement anticipé : le site affiche (et mail) le souci sans attendre.
+    arenaModeService.notifyChange();
+    const SIZE = `${gameFrame.width}×${gameFrame.height} utiles sur 1920×1080`;
+    if (FULL) {
+        console.log(`[arena-capture] cadre du jeu OK (${SIZE})`);
+    } else {
+        console.warn(
+            `[arena-capture] le jeu ne remplit pas l'image (${SIZE}, bandes noires) — probablement en fenêtre et non en plein écran : la détection des games n'est pas fiable`
+        );
+    }
+}
+
+/**
+ * Soucis de la captation remontés au site par le battement, identifiés par un
+ * code stable (jamais réutilisé pour autre chose) que le site traduit en
+ * message et en marche à suivre. Seuls les contrôles qui ont rendu un verdict
+ * y figurent, actifs ou non : un contrôle pas encore jugé (Tools qui vient de
+ * démarrer) ne doit pas passer pour un souci résolu.
+ *  - GAME_NOT_FULLSCREEN : bandes noires autour du jeu (cf. FRAME_FILTER).
+ * @returns {{ code: string, active: boolean, since: number, data?: object }[]}
+ */
+function getIssues() {
+    const ISSUES = [];
+    if (gameFrame) {
+        ISSUES.push({
+            code: 'GAME_NOT_FULLSCREEN',
+            active: !gameFrame.full,
+            since: gameFrame.since,
+            data: { width: gameFrame.width, height: gameFrame.height }
+        });
+    }
+    return ISSUES;
+}
+
 function startCapture(gameFound = false) {
     captureWanted = true;
     checkDisk();
@@ -532,6 +601,7 @@ function startCapture(gameFound = false) {
     lastError = null;
     stderrTail = [];
     videoStarted = false;
+    gameFrame = null;
 
     // Rien à filmer tant que le jeu n'est pas ouvert : la captation est armée
     // et ffmpeg démarre dès que sa fenêtre apparaît. Sur macOS (dev), le jeu
@@ -620,10 +690,19 @@ function startCapture(gameFound = false) {
         for (const FREEZE of LINE.match(/freeze_(start|end): [\d.]+/g) || []) {
             console.warn(`[arena-capture] image figée — ${FREEZE}`);
         }
-        // La progression sort dix fois par seconde : la laisser entrer dans le
-        // tail noierait le diagnostic qu'on y cherche en cas de mort.
-        if (!IS_PROGRESS) {
-            stderrTail.push(LINE);
+        const CROPS = [...LINE.matchAll(/x1:(\d+) x2:(\d+) y1:(\d+) y2:(\d+)/g)];
+        if (CROPS.length && Date.now() - startedAt >= FRAME_CHECK_MS) {
+            const [, X1, X2, Y1, Y2] = CROPS[CROPS.length - 1].map(Number);
+            checkGameFrame(X2 - X1 + 1, Y2 - Y1 + 1);
+        }
+        // La progression sort dix fois par seconde, le cadre une fois : les
+        // laisser entrer dans le tail noierait le diagnostic qu'on y cherche
+        // en cas de mort.
+        const TAIL = LINE.split('\n')
+            .filter((l) => !/cropdetect/.test(l))
+            .join('\n');
+        if (!IS_PROGRESS && TAIL) {
+            stderrTail.push(TAIL);
             if (stderrTail.length > 20) stderrTail.shift();
         }
         // Première image encodée : l'enregistrement produit réellement de la
@@ -1046,6 +1125,8 @@ function getStatus() {
         // Le renderer n'envoie du PCM que si le tube attend réellement du son.
         audio: arenaAudioService.getStatus(),
         videoStarted,
+        // Cadre du jeu : bandes noires = jeu pas en plein écran (cf. FRAME_FILTER).
+        gameFrame,
         // Webcam de la scène écartée après une panne : enregistrement sans elle.
         webcamSuspended,
         // Abonnement Arena inactif : rien n'est filmé, cf. setSuspended.
@@ -1075,6 +1156,7 @@ module.exports = {
     autoStart,
     setSuspended,
     getStatus,
+    getIssues,
     setSpoolFolder,
     getSceneView,
     setScene,
