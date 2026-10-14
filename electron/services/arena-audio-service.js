@@ -48,12 +48,28 @@ const CHANNELS = 2;
 const BYTES_PER_SAMPLE = 2;
 const BLOCK_ALIGN = CHANNELS * BYTES_PER_SAMPLE;
 const BYTES_PER_SECOND = SAMPLE_RATE * BLOCK_ALIGN;
-const TICK_MS = 100;
-// Plafond de la file. Le renderer produit légèrement plus vite ou moins vite
+// Le tick borne le retard résiduel du son (cf. MAX_BACKLOG_BYTES). Inutile de
+// descendre plus bas : sous Windows, la résolution du timer système peut être
+// de ~15,6 ms, un tick de 20 ms s'espace donc parfois jusqu'à ~31 ms. Sans
+// conséquence sur la cadence : `pump` écrit d'après le temps écoulé, pas
+// d'après le nombre de ticks.
+const TICK_MS = 20;
+// Plafond de la file. Le helper produit légèrement plus vite ou moins vite
 // que l'horloge système (deux horloges distinctes) : sans plafond, un excédent
 // s'accumulerait indéfiniment et le son prendrait du retard sur l'image. On
 // jette le plus ANCIEN, pour rester au plus près du direct.
-const MAX_BACKLOG_BYTES = BYTES_PER_SECOND;
+//
+// Ce plafond est AUSSI le retard du son quand le helper va plus vite : la file
+// sature et y reste, chaque échantillon y patiente le plafond entier avant
+// d'atteindre ffmpeg. À 1 s, les games de Rouen avaient le son 0,95 s derrière
+// l'image (mesuré le 2026-10-14 contre l'enregistrement StreamLabs). On le
+// garde donc au plus juste : deux ticks dans le pire espacement Windows. En
+// deçà, un tick en retard fait jeter du son dont le suivant aura besoin, puis
+// combler par du silence : des micro-coupures. Si les logs `pacing` montrent
+// du silence en pleine game, c'est ce plafond qu'il faut remonter.
+const MAX_BACKLOG_BYTES = (BYTES_PER_SECOND * 60) / 1000;
+// Bilan du cadencement, pour vérifier en salle la profondeur de file réelle.
+const STATS_PERIOD_MS = 60000;
 
 const PIPE_PATH =
     process.platform === 'win32'
@@ -71,6 +87,12 @@ let pacedFrom = 0;
 let timer = null;
 let silenceBlock = Buffer.alloc(BYTES_PER_SECOND, 0);
 let receivedBytes = 0;
+/** Compteurs de la période de bilan en cours (cf. logStats). */
+let statsFrom = 0;
+let statsReceived = 0;
+let statsDropped = 0;
+let statsSilence = 0;
+let statsMaxQueued = 0;
 // L'écriture est ARMÉE dès que ffmpeg ouvre le tube, et surtout PAS à la
 // première image vidéo : ffmpeg n'ouvre son muxer qu'une fois que CHACUN de ses
 // flux a produit un paquet, donc il n'annonce sa première image qu'après avoir
@@ -413,6 +435,31 @@ function resetPacing() {
     queue = [];
     queuedBytes = 0;
     queueHead = 0;
+    resetStats();
+}
+
+function resetStats() {
+    statsFrom = Date.now();
+    statsReceived = 0;
+    statsDropped = 0;
+    statsSilence = 0;
+    statsMaxQueued = 0;
+}
+
+/**
+ * Une ligne par période : profondeur de file (= retard du son sur l'image),
+ * son jeté parce que le helper va trop vite, silence comblé parce qu'il va
+ * trop lentement ou qu'aucun jeu ne tourne.
+ */
+function logStats() {
+    const MS = (bytes) => Math.round((bytes / BYTES_PER_SECOND) * 1000);
+    console.log(
+        `[arena-audio] pacing over ${Date.now() - statsFrom} ms: ` +
+            `received ${MS(statsReceived)} ms, queue ${MS(queuedBytes)} ms ` +
+            `(max ${MS(statsMaxQueued)} ms), dropped ${MS(statsDropped)} ms, ` +
+            `silence ${MS(statsSilence)} ms`
+    );
+    resetStats();
 }
 
 function stop() {
@@ -442,11 +489,14 @@ function stop() {
 function writeChunk(chunk) {
     if (!server || !chunk || !chunk.length) return;
     receivedBytes += chunk.length;
+    statsReceived += chunk.length;
     queue.push(Buffer.from(chunk));
     queuedBytes += chunk.length;
+    statsMaxQueued = Math.max(statsMaxQueued, queuedBytes);
     while (queuedBytes > MAX_BACKLOG_BYTES && queue.length > 1) {
         const DROPPED = queue.shift();
         queuedBytes -= DROPPED.length - queueHead;
+        statsDropped += DROPPED.length - queueHead;
         queueHead = 0;
     }
 }
@@ -454,6 +504,7 @@ function writeChunk(chunk) {
 /** Écrit ce que le temps écoulé exige, en complétant par du silence. */
 function pump() {
     if (!client || !pacing) return;
+    if (Date.now() - statsFrom >= STATS_PERIOD_MS) logStats();
     const ELAPSED_MS = Date.now() - pacedFrom;
     const TARGET =
         Math.floor((ELAPSED_MS / 1000) * BYTES_PER_SECOND / BLOCK_ALIGN) *
@@ -479,6 +530,7 @@ function pump() {
         if (silenceBlock.length < need) silenceBlock = Buffer.alloc(need, 0);
         client.write(silenceBlock.subarray(0, need));
         writtenBytes += need;
+        statsSilence += need;
     }
 }
 
