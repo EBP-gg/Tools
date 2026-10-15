@@ -124,6 +124,17 @@ const ARENA_CUT_MARGIN_S = 1;
 // visible. Ne s'applique que si la captation tourne (sinon rien n'arrivera).
 const SCORE_FRAME_GUARD_S = 15;
 
+// Plafond de la fenêtre analysée en un round, au-delà de l'horizon : le
+// watermark ne recule que d'un horizon derrière la fin de fenêtre, donc chaque
+// round plafonné le fait avancer d'au moins cette marge. Sans plafond, la
+// fenêtre vaut l'horizon PLUS tout ce qui a été capté pendant le round
+// précédent : sur une machine chargée, un round lent agrandit le suivant, qui
+// est plus lent encore (Rouen, 15/10/2026 : 5 min de vidéo détectées en 30 s à
+// 12h41, 30 min en 16 min 38 à 13h45, puis 66 min après un redémarrage). Les
+// segments au-delà attendent le round suivant, dans l'ordre : rien n'est perdu,
+// le retard se rattrape quand la salle est calme.
+const WINDOW_HEADROOM_S = 15 * 60;
+
 // Round périodique de rattrapage : à l'arrêt de la captation, le dernier
 // segment n'est jamais suivi d'un N+1 qui déclencherait son traitement.
 const CATCHUP_INTERVAL_MS = 60 * 1000;
@@ -135,6 +146,9 @@ let roundRunning = false;
 let roundPending = false;
 // Borne absolue (epoch s) : tout ce qui est antérieur est extrait ou périmé.
 let watermark = 0;
+// Horizon du dernier round (cf. HORIZON_S dans processRun) : il dimensionne le
+// plafond de la fenêtre suivante, qui doit le dépasser pour avancer.
+let lastHorizonS = MAX_GAME_S;
 let lastRoundAt = null;
 let lastRoundGames = 0;
 let extractedCount = 0;
@@ -344,12 +358,17 @@ async function processRun(run) {
     const STATE = arenaModeService.getState();
     purgeConsumedSegments(run);
     // Segments utiles : ceux qui peuvent encore contenir de l'inextrait.
-    const SEGMENTS = run.filter(
-        (s) =>
-            s.epoch + arenaCaptureService.getStatus().segmentSeconds >
-            watermark
-    );
-    if (SEGMENTS.length === 0) return;
+    const SEGMENT_S = arenaCaptureService.getStatus().segmentSeconds;
+    const USEFUL = run.filter((s) => s.epoch + SEGMENT_S > watermark);
+    if (USEFUL.length === 0) return;
+    // Les plus anciens d'abord, dans la limite du plafond (cf. WINDOW_HEADROOM_S).
+    const MAX_SEGMENTS = Math.ceil((lastHorizonS + WINDOW_HEADROOM_S) / SEGMENT_S);
+    const SEGMENTS = USEFUL.slice(0, MAX_SEGMENTS);
+    if (USEFUL.length > SEGMENTS.length) {
+        console.log(
+            `[arena-pipeline] fenêtre plafonnée à ${SEGMENTS.length} segment(s) sur ${USEFUL.length} — le reste au round suivant`
+        );
+    }
 
     const WORK = getWorkFolder();
     const GAMES_DIR = getGamesFolder();
@@ -544,6 +563,12 @@ async function processRun(run) {
     if (DETECT.zombiesInProgress) {
         console.log('[arena-pipeline] game Zombies en cours — horizon étendu');
     }
+    // Une game différée ouvre la fenêtre suivante (le watermark s'arrête à son
+    // début) : le plafond doit lui laisser la place d'y finir, sinon une
+    // fenêtre plafonnée la couperait encore au même endroit, round après round.
+    lastHorizonS = deferredStartEpoch
+        ? Math.max(HORIZON_S, WINDOW_END_EPOCH - deferredStartEpoch)
+        : HORIZON_S;
     // Une game différée fixe un plafond : son outro vient de se terminer, donc
     // plus rien ne signale « game en cours » et l'horizon est déjà retombé —
     // sans ce plafond, une game zombie de 35 min différée verrait son début

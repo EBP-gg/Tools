@@ -12,7 +12,11 @@ const {
 const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('node:path');
-const { unlinkSync, lowerProcessPriority } = require('./global-service');
+const {
+    unlinkSync,
+    lowerProcessPriority,
+    trackChild
+} = require('./global-service');
 
 //#endregion
 
@@ -471,6 +475,7 @@ async function cutCopyGame(
 
         const FFMPEG = spawn(FFMPEG_PATH, FFMPEG_ARGS);
         if (lowPriority) lowerProcessPriority(FFMPEG, 'FFMPEG cut copy');
+        trackChild(FFMPEG);
 
         FFMPEG.stderr.on('data', (data) => {
             console.log(`[FFMPEG] Cut copy - ${data.toString().trim()}`);
@@ -536,6 +541,7 @@ async function concatCopySegments(inputPaths, outputPath, lowPriority = false) {
 
         const FFMPEG = spawn(FFMPEG_PATH, FFMPEG_ARGS);
         if (lowPriority) lowerProcessPriority(FFMPEG, 'FFMPEG concat copy');
+        trackChild(FFMPEG);
 
         FFMPEG.stderr.on('data', (data) => {
             console.log(`[FFMPEG] Concat copy - ${data.toString().trim()}`);

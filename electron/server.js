@@ -90,6 +90,7 @@ const {
     ROOT_PATH,
     DEFAULT_VIDEO_HEIGHT,
     FFMPEG_PATH,
+    COMPONENTS_DIR,
     getAnalyzerSpawn,
     PROTOCOL_NAME,
     getCurrentPort,
@@ -125,7 +126,10 @@ const {
 } = require('./services/video-service');
 const {
     unlinkSync,
-    lowerProcessPriority
+    lowerProcessPriority,
+    trackChild,
+    killTrackedChildren,
+    killOrphanProcesses
 } = require('./services/global-service');
 const UpdateService = require('./services/update-service');
 const ytDlpService = require('./services/ytdlp-service');
@@ -1574,6 +1578,7 @@ if (!APP_GOT_THE_LOCK) {
             };
             const ANALYZER = spawn(RUNNER.command, ARGS, SPAWN_OPTIONS);
             if (lowPriority) lowerProcessPriority(ANALYZER, 'analyzer');
+            trackChild(ANALYZER);
             let BUFFER = '';
             const LINE_QUEUE = [];
             const GAMES = [];
@@ -1718,6 +1723,7 @@ if (!APP_GOT_THE_LOCK) {
                 }
             );
             lowerProcessPriority(ANALYZER, 'pause detector');
+            trackChild(ANALYZER);
             let BUFFER = '';
             let RESULT = null;
             const onLine = (LINE) => {
@@ -1802,6 +1808,7 @@ if (!APP_GOT_THE_LOCK) {
             };
             const ANALYZER = spawn(RUNNER.command, ARGS, SPAWN_OPTIONS);
             if (lowPriority) lowerProcessPriority(ANALYZER, 'chunk-analyzer');
+            trackChild(ANALYZER);
             let BUFFER = '';
             const LINE_QUEUE = [];
             const RESULTS = [];
@@ -2351,6 +2358,25 @@ if (!APP_GOT_THE_LOCK) {
         // Signalé avant tout le reste : si le démarrage échoue plus loin, on
         // veut quand même savoir que cette version s'est lancée.
         telemetryService.reportLaunch();
+
+        // Un Tools arrêté brutalement n'a pas tué ses analyzers ni les ffmpeg
+        // du pipeline (cf. `will-quit`) : un analyzer orphelin garde son
+        // window.mkv ouvert et bloque tous les rounds suivants (EBUSY). On les
+        // tue avant d'en relancer. Toutes versions de l'analyzer : une mise à
+        // jour change le nom de son exécutable. Les ffmpeg de captation ont leur
+        // propre nettoyage (cf. killOrphanCaptures).
+        const ARENA_WORK = path.join(
+            path.dirname(arenaCaptureService.getStatus().spoolFolder),
+            'work'
+        );
+        killOrphanProcesses(
+            ['analyzer', 'ffmpeg'],
+            (cmd) =>
+                cmd.includes(path.join(COMPONENTS_DIR, 'analyzer-')) ||
+                (cmd.includes(path.join(COMPONENTS_DIR, 'ffmpeg-')) &&
+                    cmd.includes(ARENA_WORK)),
+            'orphans'
+        );
 
         // ffmpeg n'est plus embarqué dans l'installeur : on l'attend avant de
         // démarrer les services qui le lancent, sinon le mode salle échouerait
@@ -3297,13 +3323,15 @@ if (!APP_GOT_THE_LOCK) {
         if (process.platform !== 'darwin') app.quit();
     });
 
-    // Sans ça, ffmpeg survit à Tools et continue de filmer, orphelin. Pas de
+    // Sans ça, ffmpeg survit à Tools et continue de filmer, orphelin (de même
+    // que l'analyzer et les ffmpeg du pipeline, cf. `trackChild`). Pas de
     // `before-quit` : il est émis même quand la fenêtre annule la fermeture
     // pour se cacher, ce qui couperait la captation d'une app toujours ouverte.
     // Pas d'attente non plus (`preventDefault`), qui retarderait
     // `quitAndInstall` : le 'q' part tout de suite, ffmpeg finalise seul.
     app.on('will-quit', () => {
         arenaCaptureService.stopCapture();
+        killTrackedChildren();
         discordRpc.destroy();
     });
 })();
