@@ -63,7 +63,11 @@ function connect() {
     });
 
     RPC.on('disconnected', () => {
-        console.log('[DISCORD RPC] Disconnected.');
+        // En salle, Discord est rarement lancé : la boucle de reconnexion
+        // produirait cette ligne toutes les 15 s et saturerait les logs.
+        if (!arenaModeService.getState().registered) {
+            console.log('[DISCORD RPC] Disconnected.');
+        }
         ready = false;
         scheduleRetry();
     });
