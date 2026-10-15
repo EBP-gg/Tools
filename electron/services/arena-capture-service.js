@@ -119,9 +119,12 @@ const FREEZE_FILTER = 'freezedetect=d=60';
 // ramené en 1080p avec des bandes noires, et son interface ne tombe plus là où
 // l'analyseur la cherche : relevé à Nîmes le 14/10/2026, 1920×1000 utiles, le
 // décompte de départ 43 px trop haut et une game coupée 100 s trop tôt.
+// `limit=0` : seul le noir pur compte. Les bandes sont le remplissage de
+// gfxcapture (#000000, resté à 0 en gris), alors que le lobby EVA d'octobre
+// 2026 a une moitié basse sombre (~11/255 de moyenne) que `limit=24` coupait.
 const FRAME_PROBE_WIDTH = 480;
 const FRAME_PROBE_HEIGHT = 270;
-const FRAME_FILTER = `fps=1,scale=${FRAME_PROBE_WIDTH}:${FRAME_PROBE_HEIGHT},format=gray,cropdetect=limit=24:round=2:reset=0,nullsink`;
+const FRAME_FILTER = `fps=1,scale=${FRAME_PROBE_WIDTH}:${FRAME_PROBE_HEIGHT},format=gray,cropdetect=limit=0:round=2:reset=0,nullsink`;
 // Le verdict attend que le jeu ait montré une image claire jusqu'aux bords :
 // une minute suffit en plein écran (mesuré à Rouen), un menu sombre peut durer.
 const FRAME_CHECK_MS = 5 * 60 * 1000;
