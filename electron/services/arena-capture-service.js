@@ -64,6 +64,11 @@ const ENCODER_CANDIDATES =
           ];
 
 let resolvedEncoder = null;
+// Verdict du probe NVENC (null tant qu'il n'a pas tourné, et hors Windows) :
+// un pilote NVIDIA trop ancien pour le ffmpeg embarqué fait encoder sur le
+// CPU, relevé à Nîmes le 15/10/2026 (API 12.2 pour 13.1 requise).
+let nvencDriver = null;
+const NVENC_DRIVER_RE = /required nvenc API version\. Required: ([\d.]+) Found: ([\d.]+)/;
 
 /**
  * Premier encodeur candidat qui encode réellement (1 s de noir → null muxer).
@@ -83,6 +88,19 @@ function resolveEncoder() {
             ],
             { encoding: 'utf8', timeout: 20000 }
         );
+        if (CANDIDATE.name === 'h264_nvenc') {
+            const M = RES.status === 0 ? null : NVENC_DRIVER_RE.exec(RES.stderr || '');
+            nvencDriver = {
+                outdated: !!M,
+                since: Date.now(),
+                data: M ? { required: M[1], found: M[2] } : undefined
+            };
+            if (M) {
+                console.warn(
+                    `[arena-capture] pilote NVIDIA trop ancien (API NVENC ${M[2]}, ${M[1]} requise) — encodage sur le CPU : mettre à jour le pilote`
+                );
+            }
+        }
         if (RES.status === 0) {
             console.log(`[arena-capture] encoder: ${CANDIDATE.name}`);
             resolvedEncoder = CANDIDATE;
@@ -574,6 +592,8 @@ function checkGameFrame(width, height) {
  * y figurent, actifs ou non : un contrôle pas encore jugé (Tools qui vient de
  * démarrer) ne doit pas passer pour un souci résolu.
  *  - GAME_NOT_FULLSCREEN : bandes noires autour du jeu (cf. FRAME_FILTER).
+ *  - NVENC_DRIVER_OUTDATED : pilote NVIDIA trop ancien, encodage sur le CPU
+ *    (cf. nvencDriver). Inactif aussi sur un PC sans carte NVIDIA.
  * @returns {{ code: string, active: boolean, since: number, data?: object }[]}
  */
 function getIssues() {
@@ -584,6 +604,14 @@ function getIssues() {
             active: !gameFrame.full,
             since: gameFrame.since,
             data: { width: gameFrame.width, height: gameFrame.height }
+        });
+    }
+    if (nvencDriver) {
+        ISSUES.push({
+            code: 'NVENC_DRIVER_OUTDATED',
+            active: nvencDriver.outdated,
+            since: nvencDriver.since,
+            data: nvencDriver.data
         });
     }
     return ISSUES;
