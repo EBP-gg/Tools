@@ -140,9 +140,15 @@ const FREEZE_FILTER = 'freezedetect=d=60';
 // `limit=0` : seul le noir pur compte. Les bandes sont le remplissage de
 // gfxcapture (#000000, resté à 0 en gris), alors que le lobby EVA d'octobre
 // 2026 a une moitié basse sombre (~11/255 de moyenne) que `limit=24` coupait.
+//
+// La branche finit sur une VRAIE sortie (`-f null`, cf. buildFfmpegArgs), pas
+// sur `nullsink` : ffmpeg ne tire pas une branche close dans le filtergraph,
+// ses images s'y empilaient sans fin et la lecture du son ralentissait pour
+// rester alignée. Rouen, 15/10/2026 : 15 Go de RAM en ~2 h, le son 1 min 30
+// derrière l'image, l'analyse étouffée par le swap, plus aucune game.
 const FRAME_PROBE_WIDTH = 480;
 const FRAME_PROBE_HEIGHT = 270;
-const FRAME_FILTER = `fps=1,scale=${FRAME_PROBE_WIDTH}:${FRAME_PROBE_HEIGHT},format=gray,cropdetect=limit=0:round=2:reset=0,nullsink`;
+const FRAME_FILTER = `fps=1,scale=${FRAME_PROBE_WIDTH}:${FRAME_PROBE_HEIGHT},format=gray,cropdetect=limit=0:round=2:reset=0[fr]`;
 // Le verdict attend que le jeu ait montré une image claire jusqu'aux bords :
 // une minute suffit en plein écran (mesuré à Rouen), un menu sombre peut durer.
 const FRAME_CHECK_MS = 5 * 60 * 1000;
@@ -479,7 +485,12 @@ function buildFfmpegArgs(overlays) {
         '-f', 'image2',
         '-update', '1',
         '-y',
-        getPreviewPath()
+        getPreviewPath(),
+        // Troisième sortie, jetée : la branche du cadre du jeu (cf. FRAME_FILTER).
+        // En dernier, pour que la progression `frame=` reste celle des segments.
+        '-map', '[fr]',
+        '-f', 'null',
+        '-'
     ];
 }
 
