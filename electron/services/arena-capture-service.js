@@ -128,8 +128,11 @@ const FRAME_FILTER = `fps=1,scale=${FRAME_PROBE_WIDTH}:${FRAME_PROBE_HEIGHT},for
 // Le verdict attend que le jeu ait montré une image claire jusqu'aux bords :
 // une minute suffit en plein écran (mesuré à Rouen), un menu sombre peut durer.
 const FRAME_CHECK_MS = 5 * 60 * 1000;
-// Plein cadre à 97 % près : ~8 lignes de 270, une barre de titre seule en fait 10.
-const FRAME_FULL_RATIO = 0.97;
+// Plein cadre à 99 % près, soit 2 lignes de 270 : la marge d'arrondi de
+// cropdetect. La barre de titre de la fenêtre, seule, ne laisse que 31 px
+// (7 lignes) de bande — mesuré à Nîmes le 15/10/2026 une fois la barre des
+// tâches retirée : 97 % la laissait passer pour du plein écran.
+const FRAME_FULL_RATIO = 0.99;
 const RESTART_MAX_DELAY_MS = 60 * 1000;
 // Plus aucune image encodée depuis ce délai alors que ffmpeg tourne : le graphe
 // est bloqué (une webcam qui cesse d'émettre peut suffire à le figer). On tue
