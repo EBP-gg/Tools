@@ -93,17 +93,29 @@ let statsReceived = 0;
 let statsDropped = 0;
 let statsSilence = 0;
 let statsMaxQueued = 0;
-// L'écriture est ARMÉE dès que ffmpeg ouvre le tube, et surtout PAS à la
-// première image vidéo : ffmpeg n'ouvre son muxer qu'une fois que CHACUN de ses
-// flux a produit un paquet, donc il n'annonce sa première image qu'après avoir
-// reçu du son. Attendre l'image pour envoyer le son est un cycle : ffmpeg reste
-// bloqué en lecture sur le tube vide, rien n'est écrit dans le spool, et la
-// vidéo n'apparaît qu'à l'arrêt (la fermeture du tube le débloque).
+// Le son et l'image n'ont PAS la même origine : le son compte ses échantillons
+// depuis le début du tube, l'image part de la première capture du jeu. Or
+// ffmpeg ouvre le tube en premier, puis la webcam et la capture du jeu : armer
+// le son à l'ouverture du tube le mettait en retard d'autant. Rouen, 15/10/2026 :
+// première image 2,7 s après le tube avec la webcam BRIO (1,1 s sans), le son
+// ~2 s derrière l'image dans les games.
 //
-// Le son est donc horodaté depuis l'ouverture du tube, l'image depuis la
-// première capture de ddagrab : l'écart entre les deux est le décalage résiduel
-// de la piste. Mesuré à ~90 ms sur un poste réel — l'ordre de grandeur des 3 s
-// jadis attribuées à l'initialisation de D3D11 était en réalité ce blocage.
+// On ne peut pas non plus attendre l'image sans rien écrire : ffmpeg n'ouvre son
+// muxer qu'une fois que CHACUN de ses flux a produit un paquet, donc il
+// n'annonce sa première image qu'après avoir reçu du son — rien ne sortirait
+// jamais. À la connexion, on écrit donc LEAD_MS de silence, juste de quoi
+// ouvrir le muxer, puis le tube se tait jusqu'à la première image (cf.
+// alignToVideo). Le son reprend alors là où en est déjà l'image : la ligne de
+// progression arrive plusieurs centaines de millisecondes après la capture de
+// la première image, d'après ce qu'elle annonce comme déjà encodé.
+const LEAD_MS = 100;
+const LEAD_BYTES = (BYTES_PER_SECOND * LEAD_MS) / 1000;
+// Filet : si la première image ne s'annonce jamais (LEAD_MS insuffisant pour
+// une autre version de ffmpeg…), le son part quand même et la vidéo avec lui,
+// avec l'ancien décalage plutôt qu'une captation bloquée.
+const ALIGN_FALLBACK_MS = 10000;
+let connectedAt = 0;
+let alignFallback = null;
 let pacing = false;
 
 //#region Source native
@@ -412,8 +424,19 @@ function start() {
         // run précédent et le premier tick déverse d'un coup tout le temps
         // écoulé depuis — soit plusieurs secondes de son collées au début.
         resetPacing();
-        pacing = true;
-        console.log('[arena-audio] pacing armed on ffmpeg connection');
+        pacing = false;
+        connectedAt = Date.now();
+        socket.write(Buffer.alloc(LEAD_BYTES, 0));
+        writtenBytes = LEAD_BYTES;
+        clearTimeout(alignFallback);
+        alignFallback = setTimeout(() => {
+            if (client !== socket || pacing) return;
+            console.warn(
+                `[arena-audio] aucune image après ${ALIGN_FALLBACK_MS} ms — son démarré sans calage sur l'image`
+            );
+            alignToVideo();
+        }, ALIGN_FALLBACK_MS);
+        console.log('[arena-audio] ffmpeg connected — sound waits for the first frame');
         socket.on('error', () => {});
         socket.on('close', () => {
             if (client === socket) client = null;
@@ -427,6 +450,24 @@ function start() {
     startSource();
     console.log(`[arena-audio] listening on ${PIPE_PATH}`);
     return PIPE_PATH;
+}
+
+/**
+ * Première image de la captation : le son reprend ici, au temps où en est déjà
+ * la vidéo (le trou est comblé par du silence au tick suivant). Une seule fois
+ * par connexion de ffmpeg.
+ * @param {number} videoMs Durée de vidéo déjà encodée.
+ */
+function alignToVideo(videoMs = 0) {
+    if (!client || pacing) return;
+    clearTimeout(alignFallback);
+    alignFallback = null;
+    pacedFrom = Date.now() - Math.max(videoMs, LEAD_MS);
+    writtenBytes = LEAD_BYTES;
+    pacing = true;
+    console.log(
+        `[arena-audio] son calé sur la première image (${Math.round(videoMs)} ms de vidéo), ${Date.now() - connectedAt} ms après la connexion de ffmpeg`
+    );
 }
 
 function resetPacing() {
@@ -464,6 +505,8 @@ function logStats() {
 
 function stop() {
     stopSource();
+    clearTimeout(alignFallback);
+    alignFallback = null;
     if (timer) {
         clearInterval(timer);
         timer = null;
@@ -576,6 +619,7 @@ module.exports = {
     findTarget,
     start,
     stop,
+    alignToVideo,
     getPipePath,
     getLevel,
     getStatus,

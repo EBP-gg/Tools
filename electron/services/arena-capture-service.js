@@ -672,11 +672,9 @@ function startCapture(gameFound = false) {
     // La captation vient de passer active : battement anticipé vers le backend.
     arenaModeService.notifyChange();
 
-    // La première image ne commande PLUS l'envoi du son : ffmpeg n'ouvre son
-    // muxer qu'une fois que chacun de ses flux a produit un paquet, donc il
-    // n'annonce jamais d'image tant qu'il n'a pas reçu de son (cf.
-    // arena-audio-service). Elle ne sert plus qu'à l'affichage et au
-    // diagnostic.
+    // La première image cale le départ du son (cf. arena-audio-service,
+    // alignToVideo) : le son compte depuis l'ouverture du tube, l'image depuis
+    // la première capture du jeu.
     let firstFrameSeen = false;
     let lastFrame = 0;
     let lastFrameAt = Date.now();
@@ -757,9 +755,9 @@ function startCapture(gameFound = false) {
             if (FRAME && Number(FRAME[1]) > 0) {
                 firstFrameSeen = true;
                 videoStarted = true;
-                // Le son démarre, lui, à l'ouverture du tube : ce délai majore
-                // donc le décalage résiduel de la piste audio. À comparer au
-                // décalage constaté dans le fichier.
+                if (process.platform === 'win32') {
+                    arenaAudioService.alignToVideo((Number(FRAME[1]) * 1000) / OUTPUT_FPS);
+                }
                 console.log(
                     `[arena-capture] first frame after ${Date.now() - startedAt}ms`
                 );
