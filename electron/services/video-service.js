@@ -522,6 +522,10 @@ async function concatCopySegments(inputPaths, outputPath, lowPriority = false) {
 
     return new Promise((resolve, reject) => {
         const FFMPEG_ARGS = [
+            // Les avertissements « Non-monotonic DTS » (inoffensifs) remplissaient
+            // à eux seuls le plafond quotidien du log en mode salle.
+            '-v',
+            'error',
             '-f',
             'concat',
             '-safe',
