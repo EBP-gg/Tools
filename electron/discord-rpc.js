@@ -30,17 +30,34 @@ function scheduleRetry() {
 }
 
 /**
- * Displays the presence in the user's current language, with a dedicated
- * text when this machine is registered as an arena (salle) PC.
+ * Cuts the Discord link while this machine is an arena (salle) PC and stops
+ * the reconnection loop. Discord clears the presence once the IPC closes.
+ */
+function disconnect() {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    ready = false;
+    if (!client) return;
+    client.destroy().catch(() => {});
+    client = null;
+}
+
+/**
+ * Displays the presence in the user's current language. On an arena (salle)
+ * PC, no presence at all: Tools disconnects from Discord.
  */
 function setActivity() {
+    if (arenaModeService.getState().registered) {
+        disconnect();
+        return;
+    }
+    if (!client) {
+        connect();
+        return;
+    }
     if (!ready) return;
     client.setActivity({
-        details: t(
-            arenaModeService.getState().registered
-                ? 'discordRpc.arenaDetails'
-                : 'discordRpc.details'
-        ),
+        details: t('discordRpc.details'),
         state: 'https://ebp.gg',
         largeImageKey: 'logo',
         largeImageText: 'EBP',
@@ -54,27 +71,27 @@ function setActivity() {
  * because discord-rpc caches its connection promise and cannot reconnect.
  */
 function connect() {
+    if (stopped || arenaModeService.getState().registered) return;
     const RPC = client = new rpc.Client({ transport: 'ipc' });
 
     RPC.on('ready', () => {
+        if (RPC !== client) return;
         console.log('[DISCORD RPC] Connection successful.');
         ready = true;
         setActivity();
     });
 
     RPC.on('disconnected', () => {
-        // En salle, Discord est rarement lancé : la boucle de reconnexion
-        // produirait cette ligne toutes les 15 s et saturerait les logs.
-        if (!arenaModeService.getState().registered) {
-            console.log('[DISCORD RPC] Disconnected.');
-        }
+        // Client dropped by disconnect(): nothing to restart.
+        if (RPC !== client) return;
+        console.log('[DISCORD RPC] Disconnected.');
         ready = false;
         scheduleRetry();
     });
 
     RPC.login({ clientId: CLIENT_ID }).catch(() => {
         RPC.destroy().catch(() => {});
-        scheduleRetry();
+        if (RPC === client) scheduleRetry();
     });
 }
 
