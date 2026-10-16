@@ -118,6 +118,11 @@ class UpdateService {
     #arenaTarget = null;
     #arenaDownloading = null;
     #arenaDownloadFailedAt = 0;
+    // Mode salle : version dont l'installation attend que le poste se libère.
+    // Sans ce garde, chaque battement de cette minute d'attente retéléchargeait
+    // l'installeur PAR-DESSUS celui qui allait être lancé, et empilait une
+    // installation de plus (Rouen, 16/10/2026 : trois en une minute).
+    #arenaInstalling = null;
     // Une vérification Squirrel est-elle en cours ? Sans ce garde, deux appels
     // rapprochés se marchent dessus et le second échoue.
     #checking = false;
@@ -712,8 +717,9 @@ class UpdateService {
 
         this.#arenaTarget = target;
         if (target === this.localVersion) return;
-        // Le téléchargement en cours relira la cible en finissant.
-        if (this.#arenaDownloading) return;
+        // Le téléchargement en cours, ou l'installation qui attend, relira la
+        // cible en finissant.
+        if (this.#arenaDownloading || this.#arenaInstalling) return;
         if (Date.now() - this.#arenaDownloadFailedAt < ARENA_DOWNLOAD_RETRY_MS) {
             return;
         }
@@ -796,6 +802,7 @@ class UpdateService {
      */
     #installArenaTarget(target, installerPath) {
         console.log(`[update] arena: installing ${target}, stopping capture`);
+        this.#arenaInstalling = target;
         arenaCaptureService.stopCapture();
 
         this.#whenFree(FORCED_WAIT_MS, () => {
@@ -803,6 +810,7 @@ class UpdateService {
             // rend la captation — une salle sans enregistrement est le pire
             // des échecs.
             if (this.#arenaTarget !== target) {
+                this.#arenaInstalling = null;
                 arenaCaptureService.autoStart();
                 this.setArenaTarget(this.#arenaTarget);
                 return;
@@ -818,6 +826,10 @@ class UpdateService {
                 detached: true,
                 stdio: 'ignore'
             }).unref();
+            // Le marqueur ci-dessus prend le relais : si Tools survit à
+            // `app.quit()`, le battement suivant doit encore constater et
+            // remonter l'échec, ce que bloquerait ce garde.
+            this.#arenaInstalling = null;
 
             // Même piège que dans `#downloadAndInstall` : la fenêtre principale
             // annule sa propre fermeture pour se cacher.
