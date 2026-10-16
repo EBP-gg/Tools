@@ -93,29 +93,19 @@ let statsReceived = 0;
 let statsDropped = 0;
 let statsSilence = 0;
 let statsMaxQueued = 0;
-// Le son et l'image n'ont PAS la même origine : le son compte ses échantillons
-// depuis le début du tube, l'image part de la première capture du jeu. Or
-// ffmpeg ouvre le tube en premier, puis la webcam et la capture du jeu : armer
-// le son à l'ouverture du tube le mettait en retard d'autant. Rouen, 15/10/2026 :
-// première image 2,7 s après le tube avec la webcam BRIO (1,1 s sans), le son
-// ~2 s derrière l'image dans les games.
+// Le son et l'image partent d'une MÊME origine, l'horloge murale relevée par
+// la captation juste avant de lancer ffmpeg (cf. setClockOrigin) : l'image est
+// datée à sa capture par rapport à elle (filtre `setpts`, cf.
+// arena-capture-service), le son est cadencé depuis elle. C'est le principe
+// d'OBS, une seule horloge, et rien n'est déduit de la sortie de ffmpeg.
 //
-// On ne peut pas non plus attendre l'image sans rien écrire : ffmpeg n'ouvre son
-// muxer qu'une fois que CHACUN de ses flux a produit un paquet, donc il
-// n'annonce sa première image qu'après avoir reçu du son — rien ne sortirait
-// jamais. À la connexion, on écrit donc LEAD_MS de silence, juste de quoi
-// ouvrir le muxer, puis le tube se tait jusqu'à la première image (cf.
-// alignToVideo). Le son reprend alors là où en est déjà l'image : la ligne de
-// progression arrive plusieurs centaines de millisecondes après la capture de
-// la première image, d'après ce qu'elle annonce comme déjà encodé.
-const LEAD_MS = 100;
-const LEAD_BYTES = (BYTES_PER_SECOND * LEAD_MS) / 1000;
-// Filet : si la première image ne s'annonce jamais (LEAD_MS insuffisant pour
-// une autre version de ffmpeg…), le son part quand même et la vidéo avec lui,
-// avec l'ancien décalage plutôt qu'une captation bloquée.
-const ALIGN_FALLBACK_MS = 10000;
-let connectedAt = 0;
-let alignFallback = null;
+// Les deux tentatives précédentes déduisaient l'écart et se trompaient d'une
+// valeur qui change à chaque démarrage. Banc Windows du 16/10/2026 (mire
+// flash + bip, 10 relances) : son armé à l'ouverture du tube, +614 ms (l'image
+// part de sa première capture, après le tube, la webcam et la capture du jeu) ;
+// son calé sur la première ligne `frame=`, −821 ms (elle sort ~1 s après la
+// première capture, le temps que NVENC s'initialise) ; une seule horloge, +5 ms.
+let clockOrigin = 0;
 let pacing = false;
 
 //#region Source native
@@ -424,19 +414,19 @@ function start() {
         // run précédent et le premier tick déverse d'un coup tout le temps
         // écoulé depuis — soit plusieurs secondes de son collées au début.
         resetPacing();
-        pacing = false;
-        connectedAt = Date.now();
-        socket.write(Buffer.alloc(LEAD_BYTES, 0));
-        writtenBytes = LEAD_BYTES;
-        clearTimeout(alignFallback);
-        alignFallback = setTimeout(() => {
-            if (client !== socket || pacing) return;
-            console.warn(
-                `[arena-audio] aucune image après ${ALIGN_FALLBACK_MS} ms — son démarré sans calage sur l'image`
-            );
-            alignToVideo();
-        }, ALIGN_FALLBACK_MS);
-        console.log('[arena-audio] ffmpeg connected — sound waits for the first frame');
+        // Le temps écoulé depuis l'origine est du silence : ffmpeg n'avait pas
+        // encore ouvert le tube. Écrit d'un bloc, sans puiser dans la file,
+        // pour que le premier son du jeu tombe à sa vraie place.
+        const ORIGIN = clockOrigin || Date.now();
+        pacedFrom = ORIGIN;
+        writtenBytes =
+            Math.floor((((Date.now() - ORIGIN) / 1000) * BYTES_PER_SECOND) / BLOCK_ALIGN) *
+            BLOCK_ALIGN;
+        if (writtenBytes > 0) socket.write(Buffer.alloc(writtenBytes, 0));
+        pacing = true;
+        console.log(
+            `[arena-audio] ffmpeg connected ${Date.now() - ORIGIN} ms after the clock origin — pacing armed`
+        );
         socket.on('error', () => {});
         socket.on('close', () => {
             if (client === socket) client = null;
@@ -453,21 +443,13 @@ function start() {
 }
 
 /**
- * Première image de la captation : le son reprend ici, au temps où en est déjà
- * la vidéo (le trou est comblé par du silence au tick suivant). Une seule fois
- * par connexion de ffmpeg.
- * @param {number} videoMs Durée de vidéo déjà encodée.
+ * Origine commune du son et de l'image, relevée juste avant chaque lancement
+ * de ffmpeg (cf. arena-capture-service). Le son de la connexion suivante est
+ * cadencé depuis elle.
+ * @param {number} ms Horloge murale (Date.now()).
  */
-function alignToVideo(videoMs = 0) {
-    if (!client || pacing) return;
-    clearTimeout(alignFallback);
-    alignFallback = null;
-    pacedFrom = Date.now() - Math.max(videoMs, LEAD_MS);
-    writtenBytes = LEAD_BYTES;
-    pacing = true;
-    console.log(
-        `[arena-audio] son calé sur la première image (${Math.round(videoMs)} ms de vidéo), ${Date.now() - connectedAt} ms après la connexion de ffmpeg`
-    );
+function setClockOrigin(ms) {
+    clockOrigin = ms;
 }
 
 function resetPacing() {
@@ -505,8 +487,6 @@ function logStats() {
 
 function stop() {
     stopSource();
-    clearTimeout(alignFallback);
-    alignFallback = null;
     if (timer) {
         clearInterval(timer);
         timer = null;
@@ -619,7 +599,7 @@ module.exports = {
     findTarget,
     start,
     stop,
-    alignToVideo,
+    setClockOrigin,
     getPipePath,
     getLevel,
     getStatus,

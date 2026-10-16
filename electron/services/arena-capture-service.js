@@ -374,10 +374,11 @@ function sceneOverlays() {
  * les images redescendues en RAM. Montage validé en salle avec NVENC comme
  * avec libx264.
  *
+ * @param {number} clockOrigin Horloge murale commune au son et à l'image.
  * @param {number} firstInput Index de la première entrée ajoutée ici (le son,
  *   s'il existe, est l'entrée 0).
  */
-function sceneArgs(overlays, firstInput) {
+function sceneArgs(overlays, clockOrigin, firstInput) {
     const IS_MAC = process.platform === 'darwin';
     const ARGS = [];
     const CHAINS = [];
@@ -400,8 +401,13 @@ function sceneArgs(overlays, firstInput) {
         )
             .map((exe) => exe.replace(/\.exe$/i, ''))
             .join('|');
+        // Chaque image est datée à sa capture sur l'horloge murale, depuis
+        // l'origine que partage le son (cf. arena-audio-service). gfxcapture
+        // fait partir sa première image de 0 : on la recale une fois sur
+        // RTCTIME, les suivantes gardent l'espacement exact de la capture.
+        const STAMP = `setpts='st(0,if(eq(N,0),RTCTIME-${clockOrigin * 1000},ld(0)));PTS+ld(0)/(TB*1000000)'`;
         CHAINS.push(
-            `gfxcapture=window_exe='(?i)${EXES}':max_framerate=60:capture_cursor=0:width=1920:height=1080:resize_mode=scale_aspect,hwdownload,format=bgra[game]`
+            `gfxcapture=window_exe='(?i)${EXES}':max_framerate=60:capture_cursor=0:width=1920:height=1080:resize_mode=scale_aspect,hwdownload,format=bgra,${STAMP}[game]`
         );
     }
     // Branche de contrôle du cadre du jeu (cf. FRAME_FILTER).
@@ -433,8 +439,9 @@ function sceneArgs(overlays, firstInput) {
 
 /**
  * @param {object[]} overlays  Éléments de la scène (cf. sceneOverlays).
+ * @param {number} clockOrigin Horloge murale commune au son et à l'image.
  */
-function buildFfmpegArgs(overlays) {
+function buildFfmpegArgs(overlays, clockOrigin) {
     const SPOOL = getSpoolFolder();
     const ENCODER = resolveEncoder();
     // Le son n'existe que sous Windows : le loopback par processus est une API
@@ -459,12 +466,8 @@ function buildFfmpegArgs(overlays) {
     // temps média) et tout le mapping temporel du pipeline.
     return [
         '-hide_banner',
-        // Progression toutes les 100 ms au lieu de 500 : c'est cette ligne qui
-        // signale la première image, et donc l'instant où le son doit
-        // commencer. Sa période est l'imprécision résiduelle de la synchro.
-        ...(WITH_AUDIO ? ['-stats_period', '0.1'] : []),
         ...AUDIO_INPUT,
-        ...sceneArgs(overlays, WITH_AUDIO ? 1 : 0),
+        ...sceneArgs(overlays, clockOrigin, WITH_AUDIO ? 1 : 0),
         ...AUDIO_OUTPUT,
         ...ENCODER.args,
         '-fps_mode', 'cfr',
@@ -664,7 +667,10 @@ function startCapture(gameFound = false) {
 
     const OVERLAYS = sceneOverlays();
     const WITH_WEBCAM = OVERLAYS.some((o) => o.kind === 'webcam');
-    const ARGS = buildFfmpegArgs(OVERLAYS);
+    // Origine commune du son et de l'image, relevée juste avant le lancement.
+    const CLOCK_ORIGIN = Date.now();
+    if (process.platform === 'win32') arenaAudioService.setClockOrigin(CLOCK_ORIGIN);
+    const ARGS = buildFfmpegArgs(OVERLAYS, CLOCK_ORIGIN);
     console.log(`[arena-capture] starting: ${FFMPEG_PATH} ${ARGS.join(' ')}`);
     const PROC = spawn(FFMPEG_PATH, ARGS, { stdio: ['pipe', 'ignore', 'pipe'] });
     ffmpegProcess = PROC;
@@ -672,9 +678,9 @@ function startCapture(gameFound = false) {
     // La captation vient de passer active : battement anticipé vers le backend.
     arenaModeService.notifyChange();
 
-    // La première image cale le départ du son (cf. arena-audio-service,
-    // alignToVideo) : le son compte depuis l'ouverture du tube, l'image depuis
-    // la première capture du jeu.
+    // La première image ne commande pas le son : les deux sont datés sur la
+    // même horloge (cf. arena-audio-service). Elle ne sert qu'à l'affichage et
+    // au diagnostic.
     let firstFrameSeen = false;
     let lastFrame = 0;
     let lastFrameAt = Date.now();
@@ -738,7 +744,7 @@ function startCapture(gameFound = false) {
             const [, X1, X2, Y1, Y2] = CROPS[CROPS.length - 1].map(Number);
             checkGameFrame(X2 - X1 + 1, Y2 - Y1 + 1);
         }
-        // La progression sort dix fois par seconde, le cadre une fois : les
+        // La progression sort deux fois par seconde, le cadre une fois : les
         // laisser entrer dans le tail noierait le diagnostic qu'on y cherche
         // en cas de mort.
         const TAIL = LINE.split('\n')
@@ -755,9 +761,6 @@ function startCapture(gameFound = false) {
             if (FRAME && Number(FRAME[1]) > 0) {
                 firstFrameSeen = true;
                 videoStarted = true;
-                if (process.platform === 'win32') {
-                    arenaAudioService.alignToVideo((Number(FRAME[1]) * 1000) / OUTPUT_FPS);
-                }
                 console.log(
                     `[arena-capture] first frame after ${Date.now() - startedAt}ms`
                 );
