@@ -154,6 +154,11 @@ require('./services/arena-identify-service');
 arenaModeService.setUpdateHandler(() => {
     UPDATE_SERVICE.forceUpdate();
 });
+// Version assignée par le serveur : seul chemin de mise à jour d'un poste de
+// salle, vers une version plus récente comme plus ancienne.
+arenaModeService.setTargetHandler((version) => {
+    UPDATE_SERVICE.setArenaTarget(version);
+});
 // Abonnement Arena inactif (402 au battement) : captation suspendue, reprise
 // d'elle-même au premier battement accepté.
 arenaModeService.setSubscriptionHandler((inactive) =>
@@ -195,6 +200,9 @@ arenaModeService.setStatusProvider(() => {
             // Version déjà téléchargée, appliquée au prochain redémarrage : la
             // page admin s'en sert pour savoir que l'installation sera rapide.
             pendingVersion: UPDATE_SERVICE.pendingVersion ?? null,
+            // Ce Tools suit la version cible du serveur : la page admin ne
+            // propose le choix de version qu'à ceux-là.
+            targetAware: true,
             // Soucis à code, affichés et mailés par le site (cf. getIssues).
             issues: arenaCaptureService.getIssues(),
             diskFreeBytes: CAPTURE.diskFreeBytes

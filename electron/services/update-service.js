@@ -67,16 +67,20 @@ const AUTO_APPLY_FAILED_KEY = 'autoApplyFailedVersion';
 // de lancement en arrière-plan.
 const NOTICE_MS = 5000;
 
-// Fenêtre de maintenance des postes de salle, en heure LOCALE.
-//
-// Mesuré sur les 242 090 games des douze derniers mois : 07h–09h ne concentre
-// que 0,088 % de l'activité (214 games), contre 0,73 % pour 04h–06h. Les salles
-// jouent TARD — 11 491 games à minuit — donc le petit matin n'est pas le creux
-// qu'on imagine ; c'est le milieu de matinée. Vérifié jour par jour : samedi et
-// dimanche chargent dès 06h, et le dimanche 09h remonte à 516 games. La fenêtre
-// tient donc précisément entre ces deux bornes.
-const ARENA_WINDOW_START_HOUR = 7;
-const ARENA_WINDOW_END_HOUR = 9;
+// Mode salle : installeur de la version cible, posé dans le dossier de
+// l'application. Un nom unique suffit : un seul téléchargement à la fois.
+const ARENA_INSTALLER_FILE = 'arena-update.exe';
+
+// Mode salle : dernière installation lancée, `{ target, from }`. PERSISTANTE à
+// dessein : si l'installeur échoue, Tools redémarre sur l'ancienne version, et
+// seul ce réglage dit qu'on a déjà essayé. Sans lui, chaque battement relancerait
+// l'installeur — et couperait la captation — indéfiniment.
+const ARENA_ATTEMPT_KEY = 'arenaTargetAttempt';
+
+// Mode salle : délai avant de retenter un téléchargement échoué. Le battement
+// part aussi sur changement d'état, parfois à quelques secondes d'intervalle :
+// sans ce délai, une release introuvable serait redemandée en rafale.
+const ARENA_DOWNLOAD_RETRY_MS = 5 * 60 * 1000;
 
 // Mise à jour ordonnée par un admin : délai maximal d'attente que le poste se
 // libère (ffmpeg qui finalise son segment, découpe, envois), et cadence de
@@ -109,10 +113,11 @@ class UpdateService {
     // redémarrage « dès que ce sera terminé ». Cette promesse doit être tenue
     // sans attendre les trente minutes d'inactivité.
     #applyWhenFree = false;
-    // La captation a-t-elle été arrêtée pour la fenêtre de maintenance en
-    // cours ? Sert aussi à la relancer si la mise à jour n'a finalement pas eu
-    // lieu : une salle laissée sans enregistrement serait le pire des échecs.
-    #arenaCaptureStopped = false;
+    // Mode salle : version assignée par le serveur, version en cours de
+    // téléchargement, et date du dernier téléchargement raté.
+    #arenaTarget = null;
+    #arenaDownloading = null;
+    #arenaDownloadFailedAt = 0;
     // Une vérification Squirrel est-elle en cours ? Sans ce garde, deux appels
     // rapprochés se marchent dessus et le second échoue.
     #checking = false;
@@ -264,6 +269,15 @@ class UpdateService {
     forceUpdate() {
         if (IS_DEV_MODE || this.localVersion.startsWith('0')) return;
 
+        // Poste de salle : la version vient du serveur, pas de GitHub. L'ordre
+        // sert alors à réessayer une installation qui a échoué.
+        if (this.#isArena()) {
+            StorageManager.setPermanentSettingsValue(ARENA_ATTEMPT_KEY, null);
+            this.#arenaDownloadFailedAt = 0;
+            if (this.#arenaTarget) this.setArenaTarget(this.#arenaTarget);
+            return;
+        }
+
         // Squirrel a déjà déposé la version sur le disque : il ne reste qu'à
         // redémarrer. Le chemin GitHub ci-dessous retéléchargerait l'installeur
         // ENTIER (149 Mo) pour arriver exactement au même résultat — sur la
@@ -310,6 +324,12 @@ class UpdateService {
      */
     predownload() {
         if (IS_DEV_MODE || this.localVersion.startsWith('0')) return;
+
+        // Poste de salle : le téléchargement suit la version cible, de lui-même.
+        if (this.#isArena()) {
+            console.log('[update] predownload: arena follows its target, ignored');
+            return;
+        }
 
         if (this.pendingVersion) {
             console.log(
@@ -469,6 +489,11 @@ class UpdateService {
             return;
         }
 
+        // Poste de salle : jamais le flux commun. Une release y partirait vers
+        // toutes les salles, et Squirrel y défairait tout retour à une version
+        // antérieure. La version vient du serveur (`setArenaTarget`).
+        if (this.#isArena()) return;
+
         // Windows et macOS passent par Squirrel, qui télécharge et installe en
         // tâche de fond sans rien demander. Le flux maison reste le repli, et
         // demeure le seul chemin sous Linux, que Squirrel ne couvre pas.
@@ -610,16 +635,9 @@ class UpdateService {
     #considerIdleApply() {
         if (!this.pendingVersion || this.#applying) return;
 
-        // Mode salle : ce poste a sa propre règle, évaluée AVANT le test
-        // d'occupation. La captation est un ffmpeg unique qui tourne en continu
-        // — la machine n'est donc jamais vue inactive, et aucune des règles qui
-        // suivent ne se déclencherait jamais. Sans ce chemin, une salle resterait
-        // sur sa version jusqu'à ce que quelqu'un redémarre le PC : personne ne
-        // le fait.
-        if (arenaModeService.getState().registered) {
-            this.#considerArenaWindow();
-            return;
-        }
+        // Mode salle : la version est celle que le serveur assigne
+        // (`setArenaTarget`), jamais une version déposée par Squirrel.
+        if (this.#isArena()) return;
 
         if (activityTracker.isBusy()) return;
 
@@ -665,57 +683,151 @@ class UpdateService {
     }
 
     /**
-     * Applique une mise à jour sur un poste de salle, dans la fenêtre nocturne
-     * où plus personne ne joue.
-     *
-     * L'ordre compte : on arrête d'abord la captation — `stopCapture` écrit `q`
-     * sur l'entrée de ffmpeg, qui finalise son segment — puis on attend que le
-     * poste soit réellement libre avant d'appliquer. Le processus ffmpeg reste
-     * compté occupé le temps de sa finalisation, tout comme la découpe et les
-     * envois qui peuvent encore suivre : le tick de cinq minutes revient les
-     * constater, et la fenêtre de deux heures en offre vingt-quatre.
-     *
-     * Au boot, `autoStart()` reprend la captation : le redémarrage est donc
-     * auto-réparant, ce qui est la condition même de cette fonction.
+     * Ce poste est-il un poste de salle piloté par sa version cible ? Windows
+     * seulement : sous macOS l'installeur est un .dmg, qui attend un humain.
      */
-    #considerArenaWindow() {
-        const HOUR = new Date().getHours();
-        const IN_WINDOW =
-            HOUR >= ARENA_WINDOW_START_HOUR && HOUR < ARENA_WINDOW_END_HOUR;
+    #isArena() {
+        return (
+            os.platform() === 'win32' &&
+            arenaModeService.getState().registered
+        );
+    }
 
-        if (!IN_WINDOW) {
-            // On sort de la fenêtre sans avoir appliqué : il faut RENDRE la
-            // captation. L'oublier laisserait une salle sans enregistrement
-            // jusqu'à ce qu'un humain s'en aperçoive — bien pire que de rester
-            // sur une vieille version.
-            if (this.#arenaCaptureStopped) {
-                console.log(
-                    '[update] arena window closed without applying ' +
-                        '→ resuming capture'
+    /**
+     * Mode salle : aligne le poste sur la version que le serveur lui assigne,
+     * reçue par le battement ou par le socket. Seul chemin de mise à jour d'un
+     * poste de salle, dans les deux sens : l'installeur complet de la version
+     * cible remplace la version en place, qu'elle soit plus récente ou plus
+     * ancienne — Squirrel, lui, ne sait que monter.
+     *
+     * Télécharge sans toucher à la captation, puis installe aussitôt. Idempotent :
+     * rappelé à chaque battement, il ne relance ni un téléchargement en cours ni
+     * une installation déjà tentée depuis cette version.
+     *
+     * @param {string} target Version assignée par le serveur.
+     */
+    setArenaTarget(target) {
+        if (IS_DEV_MODE || this.localVersion.startsWith('0')) return;
+        if (!this.#isArena() || typeof target !== 'string' || !target) return;
+
+        this.#arenaTarget = target;
+        if (target === this.localVersion) return;
+        // Le téléchargement en cours relira la cible en finissant.
+        if (this.#arenaDownloading) return;
+        if (Date.now() - this.#arenaDownloadFailedAt < ARENA_DOWNLOAD_RETRY_MS) {
+            return;
+        }
+
+        // L'installeur a déjà été lancé vers cette cible depuis cette version,
+        // et l'on tourne toujours sur l'ancienne : il a échoué. On ne le relance
+        // pas de soi-même — l'ordre de mise à jour d'un admin efface ce
+        // marqueur (`forceUpdate`).
+        const ATTEMPT = StorageManager.getPermanentSettingsValue(ARENA_ATTEMPT_KEY);
+        if (
+            ATTEMPT &&
+            ATTEMPT.target === target &&
+            ATTEMPT.from === this.localVersion
+        ) {
+            if (!ATTEMPT.reported) {
+                console.error(
+                    `[update] arena: ${target} installer ran but ` +
+                        `${this.localVersion} is still running`
                 );
-                this.#arenaCaptureStopped = false;
-                arenaCaptureService.autoStart();
+                telemetryService.reportUpdate('update_failed', {
+                    target,
+                    reason: 'installer ran, version unchanged'
+                });
+                StorageManager.setPermanentSettingsValue(ARENA_ATTEMPT_KEY, {
+                    ...ATTEMPT,
+                    reported: true
+                });
             }
             return;
         }
 
-        if (!this.#arenaCaptureStopped) {
-            console.log(
-                `[update] arena maintenance window, ${this.pendingVersion} ` +
-                    'pending → stopping capture'
-            );
-            this.#arenaCaptureStopped = true;
-            arenaCaptureService.stopCapture();
-            return;
-        }
-
-        // ffmpeg finalise encore, ou la découpe et les envois se poursuivent.
-        if (activityTracker.isBusy()) return;
-
-        console.log(
-            `[update] arena idle in window → applying ${this.pendingVersion}`
+        const FILE_URL = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${target}/EBP-Tools-${target}.exe`;
+        const DESTINATION_PATH = path.join(
+            app.getPath('userData'),
+            ARENA_INSTALLER_FILE
         );
-        this.applyPendingUpdate(true);
+        console.log(
+            `[update] arena target ${target} (running ${this.localVersion}) ` +
+                '→ downloading installer'
+        );
+        this.#arenaDownloading = target;
+        telemetryService.reportUpdate('update_started', { target });
+
+        this.#download(
+            FILE_URL,
+            DESTINATION_PATH,
+            () => {
+                this.#arenaDownloading = null;
+                // La cible a changé pendant le téléchargement : ce fichier ne
+                // sert plus, on repart sur la nouvelle (ou on reste, si elle est
+                // revenue à la version en place).
+                if (this.#arenaTarget !== target) {
+                    console.log(
+                        `[update] arena: ${target} downloaded but target is now ` +
+                            `${this.#arenaTarget} → discarded`
+                    );
+                    this.setArenaTarget(this.#arenaTarget);
+                    return;
+                }
+                this.#installArenaTarget(target, DESTINATION_PATH);
+            },
+            (reason) => {
+                this.#arenaDownloading = null;
+                this.#arenaDownloadFailedAt = Date.now();
+                console.error(
+                    `[update] arena: ${target} download failed: ${reason}`
+                );
+                telemetryService.reportUpdate('update_failed', {
+                    target,
+                    reason
+                });
+            }
+        );
+    }
+
+    /**
+     * Mode salle : arrête la captation, attend que le poste se libère (ffmpeg
+     * finalise son segment), puis lance l'installeur et quitte. L'installeur
+     * relance Tools, qui reprend la captation au boot.
+     */
+    #installArenaTarget(target, installerPath) {
+        console.log(`[update] arena: installing ${target}, stopping capture`);
+        arenaCaptureService.stopCapture();
+
+        this.#whenFree(FORCED_WAIT_MS, () => {
+            // La cible a changé pendant l'attente : on n'installe pas, et l'on
+            // rend la captation — une salle sans enregistrement est le pire
+            // des échecs.
+            if (this.#arenaTarget !== target) {
+                arenaCaptureService.autoStart();
+                this.setArenaTarget(this.#arenaTarget);
+                return;
+            }
+
+            // Posé AVANT de lancer : un échec ramène sur l'ancienne version sans
+            // que personne ne revienne l'écrire.
+            StorageManager.setPermanentSettingsValue(ARENA_ATTEMPT_KEY, {
+                target,
+                from: this.localVersion
+            });
+            spawn(installerPath, {
+                detached: true,
+                stdio: 'ignore'
+            }).unref();
+
+            // Même piège que dans `#downloadAndInstall` : la fenêtre principale
+            // annule sa propre fermeture pour se cacher.
+            const WINDOW = getMainWindow();
+            if (WINDOW && !WINDOW.isDestroyed()) {
+                WINDOW.destroy();
+            }
+
+            app.quit();
+        });
     }
 
     /**

@@ -70,6 +70,9 @@ let fetchingFile = null;
 // Callback d'exécution d'une mise à jour ordonnée par l'admin (posé par
 // server.js : stop captation propre puis UpdateService.forceUpdate()).
 let updateHandler = null;
+// Callback d'alignement sur la version cible assignée par le serveur (posé par
+// server.js : UpdateService.setArenaTarget()).
+let targetHandler = null;
 // Abonnement Arena de la salle inactif : le dernier battement a reçu un 402.
 let subscriptionInactive = false;
 // Callback de suspension de la captation (posé par server.js : le service de
@@ -78,6 +81,15 @@ let subscriptionHandler = null;
 
 function setUpdateHandler(handler) {
     updateHandler = handler;
+}
+
+/**
+ * Pose le callback qui reçoit la version cible du poste, à chaque battement et
+ * à chaque changement poussé par le socket.
+ * @param {(version: string) => void} handler
+ */
+function setTargetHandler(handler) {
+    targetHandler = handler;
 }
 
 /**
@@ -201,6 +213,10 @@ function sendHeartbeat() {
             setSubscriptionInactive(false);
             if (!res) return;
             if (res.fetch) handleFetchOrder(res.fetch, STATE);
+            // Cible d'abord : l'ordre de mise à jour, en salle, la réessaie.
+            if (res.targetVersion && targetHandler) {
+                targetHandler(res.targetVersion);
+            }
             if (res.update) runUpdate();
         })
         .catch((e) => {
@@ -437,6 +453,9 @@ function startHeartbeat() {
         onDelete: deleteFile,
         onFrame: readPreviewFrame,
         onUpdate: runUpdate,
+        onTarget: (version) => {
+            if (targetHandler) targetHandler(version);
+        },
         onDownload: () => {
             if (remoteControl) remoteControl.download();
         },
@@ -538,6 +557,7 @@ module.exports = {
     unregister,
     startHeartbeat,
     setUpdateHandler,
+    setTargetHandler,
     setSubscriptionHandler,
     setStatusProvider,
     setRemoteControl,
