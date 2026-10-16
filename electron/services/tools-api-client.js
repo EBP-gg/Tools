@@ -267,6 +267,23 @@ function submitPreAnalysis(payload, systemKey) {
 }
 
 /**
+ * POST /api/tools/arena/pre-analysis/failed
+ * MODE SYSTÈME : signale une game qui ne pourra jamais être analysée, pour que le
+ * serveur ne la serve plus.
+ *
+ * @param {{gameId: string, reason: 'bad_size'|'bad_duration'|'analysis_error'|'no_payload'}} payload
+ * @param {string} systemKey
+ * @returns {Promise<{ok: true}>}
+ */
+function reportPreAnalysisFailure(payload, systemKey) {
+    return apiRequest('POST', '/arena/pre-analysis/failed', payload, {
+        retries: 1,
+        requireAuth: false,
+        headers: { 'X-System-Token': systemKey }
+    });
+}
+
+/**
  * POST /api/tools/games/:gameID/upload-url
  * @param {string|number} gameID
  * @param {string|undefined} teamId  équipe-auteur de la vidéo (issue du deeplink du
@@ -907,6 +924,7 @@ module.exports = {
     persistAnalysis,
     fetchPreAnalysisBatch,
     submitPreAnalysis,
+    reportPreAnalysisFailure,
     requestUploadUrl,
     confirmUpload,
     uploadFileToPresignedUrl,

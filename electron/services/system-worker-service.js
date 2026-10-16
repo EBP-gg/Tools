@@ -10,6 +10,7 @@ const path = require('node:path');
 const {
     fetchPreAnalysisBatch,
     submitPreAnalysis,
+    reportPreAnalysisFailure,
     downloadPresignedUrlToFile,
     ApiError
 } = require('./tools-api-client');
@@ -171,6 +172,20 @@ function removeQuietly(filePath) {
 }
 
 /**
+ * Signale au serveur une game qui échouera à chaque nouvel essai, pour qu'il ne la
+ * serve plus — sinon elle revient (et se retélécharge) à chaque péremption de sa
+ * réservation. Un échec de ce signalement n'est que logué : au pire, la game revient.
+ */
+async function reportFailure(gameId, reason, systemKey) {
+    try {
+        await reportPreAnalysisFailure({ gameId: String(gameId), reason }, systemKey);
+        console.warn(`[system-worker] ${gameId} sortie de la file (${reason})`);
+    } catch (e) {
+        console.warn(`[system-worker] ${gameId} : échec non signalé au serveur (${reason})`, e.message);
+    }
+}
+
+/**
  * Analyse une game servie par le serveur et remonte son payload.
  * @returns {Promise<boolean>} true si l'analyse a été acceptée par le serveur.
  */
@@ -191,6 +206,7 @@ async function processGame(game, systemKey) {
         );
         if (SIZE === 0 || SIZE > MAX_VIDEO_BYTES) {
             console.warn(`[system-worker] ${game.gameId} : taille inattendue (${SIZE} o), ignorée`);
+            await reportFailure(game.gameId, 'bad_size', systemKey);
             return false;
         }
 
@@ -200,6 +216,7 @@ async function processGame(game, systemKey) {
         const DURATION = await probeVideoDuration(VIDEO_PATH);
         if (!(DURATION > 0) || DURATION > MAX_GAME_SECONDS) {
             console.warn(`[system-worker] ${game.gameId} : durée inattendue (${Math.round(DURATION)} s), ignorée`);
+            await reportFailure(game.gameId, 'bad_duration', systemKey);
             return false;
         }
         console.log(
@@ -240,11 +257,13 @@ async function processGame(game, systemKey) {
         );
         if (RESULTS && RESULTS.error) {
             console.warn(`[system-worker] ${game.gameId} : phase 2 en échec — ${RESULTS.error}`);
+            await reportFailure(game.gameId, 'analysis_error', systemKey);
             return false;
         }
         const ENTRY = (RESULTS.results || []).find((r) => String(r.gameID) === String(game.gameId));
         if (!ENTRY || ENTRY.payload === undefined) {
             console.warn(`[system-worker] ${game.gameId} : aucun payload produit`);
+            await reportFailure(game.gameId, 'no_payload', systemKey);
             return false;
         }
 
