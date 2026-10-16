@@ -178,6 +178,7 @@ async function processGame(game, systemKey) {
     const VIDEO_PATH = path.join(workDir(), `${game.guid}_${game.terrainId}.mp4`);
     try {
         console.log(`[system-worker] ${game.gameId} — téléchargement (${game.map || 'map inconnue'})`);
+        const DOWNLOAD_START = Date.now();
         await downloadPresignedUrlToFile(
             game.videoUrl,
             VIDEO_PATH,
@@ -185,6 +186,9 @@ async function processGame(game, systemKey) {
             (ratio) => setGameProgress(game.gameId, ratio * PROGRESS_DOWNLOAD_END)
         );
         const SIZE = fs.statSync(VIDEO_PATH).size;
+        console.log(
+            `[system-worker] ${game.gameId} — téléchargée en ${((Date.now() - DOWNLOAD_START) / 1000).toFixed(1)} s (${(SIZE / 1e6).toFixed(0)} Mo)`
+        );
         if (SIZE === 0 || SIZE > MAX_VIDEO_BYTES) {
             console.warn(`[system-worker] ${game.gameId} : taille inattendue (${SIZE} o), ignorée`);
             return false;
