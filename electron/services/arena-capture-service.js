@@ -424,8 +424,23 @@ function sceneArgs(overlays, clockOrigin, firstInput) {
             // d'une entrée terminée (eof_action=repeat), inutile de la boucler.
             ARGS.push('-i', item.path);
         }
+        // La webcam garde ses propres pts (0 à son ouverture), en retard sur
+        // ceux du jeu, datés sur l'horloge murale : `overlay` attendait alors
+        // une image webcam aussi récente que celle du jeu, sans plus tirer
+        // gfxcapture, qui ne rend que sa dernière capture — la vidéo n'avançait
+        // plus que par saccades (Rouen, 16/10/2026 : ~3 images toutes les
+        // 1,7 s). On la recale donc sur la même horloge, comme le jeu : une
+        // fois, à sa première image, en gardant ensuite l'espacement de la
+        // caméra. La dater image par image à son arrivée ne suffisait pas :
+        // traitées par paquets, ses images recevaient la même date et `overlay`
+        // n'en gardait qu'une (banc Windows : 3,4 images webcam/s, 15 ainsi).
+        // Prix mesuré : la webcam affichée ~0,5 s derrière le jeu.
+        const WEBCAM_STAMP =
+            item.kind === 'webcam' && !IS_MAC
+                ? `setpts='st(1,if(eq(N,0),RTCTIME-${clockOrigin * 1000}-PTS*TB*1000000,ld(1)));PTS+ld(1)/(TB*1000000)',`
+                : '';
         CHAINS.push(
-            `[${input++}:v]scale=${item.width}:${item.height}[o${i}]`,
+            `[${input++}:v]${WEBCAM_STAMP}scale=${item.width}:${item.height}[o${i}]`,
             `[s${i}][o${i}]overlay=${item.x}:${item.y}[s${i + 1}]`
         );
     });
