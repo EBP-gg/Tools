@@ -55,6 +55,7 @@ const ARENA_RETRY_MS = 60 * 1000;
  *          onDelete: (folder: string, name: string) => {deleted:boolean, reason?:string},
  *          onFrame: () => {image: string|null, reason?: string},
  *          onUpdate: () => void,
+ *          onDownload: () => void,
  *          onCapture: (action: string) => object,
  *          onRestart: () => void,
  *          onConnect?: () => void}} handlers
@@ -110,6 +111,9 @@ function connectArena(state, handlers) {
     // Mise à jour ordonnée par un admin. Pas d'acquittement : Tools arrête la
     // captation et relance l'installeur, il ne sera plus là pour répondre.
     arenaSocket.on('arena_update', () => handlers.onUpdate());
+    // Téléchargement de la mise à jour, sans l'installer. Pas d'acquittement :
+    // l'issue arrive par le battement, qui remonte la version téléchargée.
+    arenaSocket.on('arena_download', () => handlers.onDownload());
     // Image de ce qui est filmé en ce moment : lue dans le fichier d'aperçu que
     // ffmpeg réécrit en continu, donc sans toucher au périphérique (que la
     // captation tient en exclusivité).

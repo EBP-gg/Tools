@@ -104,7 +104,8 @@ function setSubscriptionInactive(value) {
  * et sur Tools lui-même. Posées par server.js, comme le statusProvider : les
  * services concernés requièrent déjà celui-ci, un require croisé serait
  * circulaire.
- * @param {{capture: (action: string) => object, restart: () => void}} control
+ * @param {{capture: (action: string) => object, restart: () => void,
+ *   download: () => void}} control
  */
 function setRemoteControl(control) {
     remoteControl = control;
@@ -436,6 +437,9 @@ function startHeartbeat() {
         onDelete: deleteFile,
         onFrame: readPreviewFrame,
         onUpdate: runUpdate,
+        onDownload: () => {
+            if (remoteControl) remoteControl.download();
+        },
         onCapture: (action) =>
             remoteControl ? remoteControl.capture(action) : { error: 'unavailable' },
         onRestart: () => {

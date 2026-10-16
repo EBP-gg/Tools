@@ -189,6 +189,10 @@ class UpdateService {
                         `[update] native: ${this.pendingVersion} installée, ` +
                             'sera appliquée au prochain démarrage'
                     );
+                    // Mode salle : la page admin attend ce moment pour proposer
+                    // l'installation. Sans battement immédiat, elle ne le
+                    // saurait qu'au périodique, jusqu'à 20 min plus tard.
+                    arenaModeService.notifyChange();
                     this.#applyAfterUserCheck();
                 }
             );
@@ -293,6 +297,37 @@ class UpdateService {
             });
             this.#downloadAndInstall(NAMES, true);
         });
+    }
+
+    /**
+     * Mode salle : téléchargement ordonné par un admin, SANS installation. Sert
+     * à préparer une fenêtre courte : Squirrel dépose la version à l'avance, et
+     * l'ordre de mise à jour (`forceUpdate`) n'a plus qu'à redémarrer. La
+     * captation n'est pas touchée.
+     *
+     * Squirrel seul : le flux maison ne sait que télécharger PUIS installer.
+     * Sur ce chemin l'ordre est ignoré, l'ordre de mise à jour reste disponible.
+     */
+    predownload() {
+        if (IS_DEV_MODE || this.localVersion.startsWith('0')) return;
+
+        if (this.pendingVersion) {
+            console.log(
+                `[update] predownload: ${this.pendingVersion} already downloaded`
+            );
+            arenaModeService.notifyChange();
+            return;
+        }
+
+        if (!['win32', 'darwin'].includes(os.platform()) || this.#nativeFailed) {
+            console.log(
+                '[update] predownload: native updater unavailable, ignored'
+            );
+            return;
+        }
+
+        console.log('[update] predownload ordered by admin');
+        this.#checkNative();
     }
 
     /**

@@ -192,6 +192,9 @@ arenaModeService.setStatusProvider(() => {
                 lastError: UPLOADER.lastError
             },
             update: telemetryService.getUpdateHealth(),
+            // Version déjà téléchargée, appliquée au prochain redémarrage : la
+            // page admin s'en sert pour savoir que l'installation sera rapide.
+            pendingVersion: UPDATE_SERVICE.pendingVersion ?? null,
             // Soucis à code, affichés et mailés par le site (cf. getIssues).
             issues: arenaCaptureService.getIssues(),
             diskFreeBytes: CAPTURE.diskFreeBytes
@@ -199,7 +202,7 @@ arenaModeService.setStatusProvider(() => {
     };
 });
 // Commandes d'un admin (page « Tools - salles ») : démarrer ou couper la
-// captation, redémarrer Tools. La coupure n'est pas mémorisée — comme le bouton
+// captation, redémarrer Tools, télécharger la mise à jour. La coupure n'est pas mémorisée — comme le bouton
 // Arrêter local, le prochain démarrage de Tools relance la captation.
 arenaModeService.setRemoteControl({
     capture: (action) => {
@@ -230,6 +233,10 @@ arenaModeService.setRemoteControl({
             restartApp(UPDATE_SERVICE);
         };
         WAIT();
+    },
+    download: () => {
+        console.log('[arena-mode] admin order: download update');
+        UPDATE_SERVICE.predownload();
     }
 });
 const {
